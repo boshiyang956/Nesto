@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>暖账本 · 小暖记账</title>
+  <meta name="description" content="暖账本：支持收支分类、日历日程、多卡管理、预算提醒与自定义主题的记账工具。">
+  <meta name="theme-color" content="#f26b1d">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/styles.css?v=10">
+</head>
+<body>
+  <!-- 登录页 -->
+  <div id="loginScreen" class="login-screen hidden">
+    <div class="login-bg" aria-hidden="true"></div>
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="brand-mark">暖</div>
+        <h1>暖账本</h1>
+        <p>把每一笔生活，记得清清楚楚</p>
+      </div>
+      <div class="login-tabs" role="tablist">
+        <button class="tab-btn is-active" type="button" data-login-tab="login">登录</button>
+        <button class="tab-btn" type="button" data-login-tab="register">注册</button>
+      </div>
+      <form id="loginForm" class="login-form" autocomplete="on">
+        <label class="field">
+          <span>用户名</span>
+          <input id="loginName" name="username" type="text" placeholder="给自己起个名字" required>
+        </label>
+        <label class="field">
+          <span>密码</span>
+          <input id="loginPassword" name="password" type="password" placeholder="至少 4 位" required minlength="4">
+        </label>
+        <button class="primary-btn" type="submit" id="loginSubmitBtn">进入账本</button>
+        <p id="loginError" class="login-error" role="alert"></p>
+      </form>
+      <button class="ghost-btn" type="button" id="guestBtn">直接体验（从零开始）</button>
+      <p class="login-hint">数据保存在当前浏览器本地，离线可用</p>
+    </div>
+  </div>
+
+  <!-- 主应用 -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <div class="brand-mark small">暖</div>
+        <div class="brand-name">
+          <strong>暖账本</strong>
+          <span>warm ledger</span>
+        </div>
+        <button class="icon-btn sidebar-close" type="button" id="sidebarCloseBtn" title="收起菜单" aria-label="收起菜单"></button>
+      </div>
+      <nav class="side-nav" aria-label="主导航">
+        <button class="nav-item is-active" type="button" data-view="overview"><span class="nav-icon"></span><span>总览</span></button>
+        <button class="nav-item" type="button" data-view="bills"><span class="nav-icon"></span><span>账单</span></button>
+        <button class="nav-item" type="button" data-view="calendar"><span class="nav-icon"></span><span>日历</span></button>
+        <button class="nav-item" type="button" data-view="cards"><span class="nav-icon"></span><span>卡片</span></button>
+        <button class="nav-item" type="button" data-view="goals"><span class="nav-icon"></span><span>目标</span></button>
+        <button class="nav-item" type="button" data-view="categories"><span class="nav-icon"></span><span>分类</span></button>
+        <button class="nav-item" type="button" data-view="settings"><span class="nav-icon"></span><span>设置</span></button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="user-chip" id="userChip">
+          <div class="avatar" id="sidebarAvatar">暖</div>
+          <div class="user-chip-text">
+            <strong id="sidebarUserName">访客</strong>
+            <span>本地账号</span>
+          </div>
+          <button class="icon-btn" type="button" id="logoutBtn" title="退出登录" aria-label="退出登录"></button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="app-main">
+      <header class="topbar">
+        <button class="icon-btn mobile-menu-btn" type="button" id="mobileMenuBtn" title="打开菜单" aria-label="打开菜单"></button>
+        <div class="topbar-title">
+          <h2 id="viewTitle">总览</h2>
+          <p id="viewSubtitle"></p>
+        </div>
+        <div class="topbar-actions">
+          <button class="primary-btn compact" type="button" id="quickAddBtn"><span class="btn-icon"></span>记一笔</button>
+        </div>
+      </header>
+      <main id="viewContent" class="view-content" tabindex="-1"></main>
+    </div>
+
+    <nav class="mobile-nav" aria-label="移动端导航">
+      <button class="mnav-item is-active" type="button" data-view="overview"><span class="nav-icon"></span><span>总览</span></button>
+      <button class="mnav-item" type="button" data-view="bills"><span class="nav-icon"></span><span>账单</span></button>
+      <button class="mnav-item" type="button" data-view="calendar"><span class="nav-icon"></span><span>日历</span></button>
+      <button class="mnav-item" type="button" data-view="cards"><span class="nav-icon"></span><span>卡片</span></button>
+      <button class="mnav-item" type="button" data-view="settings"><span class="nav-icon"></span><span>设置</span></button>
+    </nav>
+  </div>
+
+  <div id="modalRoot" class="modal-root"></div>
+  <div id="toastRoot" class="toast-root" aria-live="polite"></div>
+
+  <script src="js/utils.js?v=10"></script>
+  <script src="js/store.js?v=10"></script>
+  <script src="js/charts.js?v=10"></script>
+  <script src="js/views.js?v=10"></script>
+  <script src="js/modals.js?v=10"></script>
+  <script src="js/app.js?v=10"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('sw.js').catch(function () {});
+      });
+    }
+  </script>
+</body>
+</html>
