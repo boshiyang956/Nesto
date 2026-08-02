@@ -53,6 +53,7 @@
     calAnchor: U.todayStr(),
     calSelected: U.todayStr(),
     calDetail: null,
+    calTimeSel: null,
     cardsSelected: null,
     goalsAnchor: U.todayStr(),
     categoriesTab: 'expense',
@@ -192,12 +193,13 @@
     const cat = S.categoryById(tx.categoryId);
     const sub = S.subName(tx.categoryId, tx.subcategoryId);
     const detail = S.detailName(tx.categoryId, tx.subcategoryId, tx.detailId);
+    const child = S.detailChildName(tx.categoryId, tx.subcategoryId, tx.detailId, tx.detailChildId);
     const card = tx.cardId ? S.cardById(tx.cardId) : null;
     const isExpense = tx.kind === 'expense';
     const isIncome = tx.kind === 'income';
     const sign = isExpense ? '-' : isIncome ? '+' : '';
     const cls = isExpense ? 'expense' : isIncome ? 'income' : 'muted';
-    const note = tx.note || [detail, sub, S.catName(tx.categoryId)].filter(Boolean).join(' · ');
+    const note = tx.note || [child, detail, sub, S.catName(tx.categoryId)].filter(Boolean).join(' · ');
     let meta = tx.time + (card ? ' · ' + card.name : '') + ' · ' + tx.paymentType;
     if (tx.mood) meta += ' ' + tx.mood;
     const attrs = opts && opts.detail ? ' data-action="cal-detail" data-kind="tx" data-id="' + tx.id + '"' : '';
@@ -409,7 +411,18 @@
     const advice = buildOverviewAdvice(type, anchor, totals, prev, byCat, monthGoal);
 
     const sortedTxs = txs.slice().sort(function (a, b) { return a.date === b.date ? (a.time || '') < (b.time || '') ? 1 : -1 : a.date < b.date ? 1 : -1; });
-    const recent = sortedTxs.slice(0, 5).map(txRowHtml).join('') || '<div class="chart-empty">还没有账单，点右上角记一笔吧</div>';
+    const recentGroups = {};
+    sortedTxs.slice(0, 8).forEach(function (t) {
+      if (!recentGroups[t.date]) recentGroups[t.date] = [];
+      recentGroups[t.date].push(t);
+    });
+    const recent = Object.keys(recentGroups).sort(function (a, b) { return a < b ? 1 : -1; }).map(function (date) {
+      const hol = U.holidayFor(date);
+      return '<div class="tx-group">' +
+        '<div class="tx-group-head"><span class="dot"></span>' + U.escapeHtml(U.formatCN(date, true)) + (hol ? '<span class="pill danger">' + U.escapeHtml(hol.name) + '</span>' : '') + '<span class="right">' + recentGroups[date].length + ' 笔</span></div>' +
+        recentGroups[date].map(txRowHtml).join('') +
+        '<button class="ghost-btn compact tx-add-btn" type="button" data-action="bills-add" data-date="' + date + '">' + U.icon('plus', 15) + ' 记账</button></div>';
+    }).join('') || '<div class="chart-empty">还没有账单，点右上角记一笔吧</div>';
 
     U.qs('#viewContent').innerHTML =
       '<div class="view-stack">' +
@@ -542,7 +555,7 @@
     Object.keys(groups).sort(function (a, b) { return a < b ? 1 : -1; }).forEach(function (date) {
       const dayTotals = S.totals(groups[date]);
       const hol = U.holidayFor(date);
-      listHtml += '<div class="tx-group"><div class="tx-group-head"><span class="dot"></span>' + U.escapeHtml(U.formatCN(date, true)) + (hol ? '<span class="pill danger">' + U.escapeHtml(hol.name) + '</span>' : '') + '<span class="right">收 ' + U.moneyPlain(dayTotals.income) + ' · 支 ' + U.moneyPlain(dayTotals.expense) + '</span></div>' + groups[date].map(txRowHtml).join('') + '</div>';
+      listHtml += '<div class="tx-group"><div class="tx-group-head"><span class="dot"></span>' + U.escapeHtml(U.formatCN(date, true)) + (hol ? '<span class="pill danger">' + U.escapeHtml(hol.name) + '</span>' : '') + '<span class="right">收 ' + U.moneyPlain(dayTotals.income) + ' · 支 ' + U.moneyPlain(dayTotals.expense) + '</span></div>' + groups[date].map(txRowHtml).join('') + '<button class="ghost-btn compact tx-add-btn" type="button" data-action="bills-add" data-date="' + date + '">' + U.icon('plus', 15) + ' 记账</button></div>';
     });
     if (!listHtml) listHtml = '<div class="chart-empty">没有符合条件的账单</div>';
 
@@ -593,7 +606,7 @@
         const schedLabels = dayScheds.slice(0, 2).map(function (s) { return '<span class="cal-event-label" style="color:var(--accent)">' + U.escapeHtml(s.title) + '</span>'; }).join('');
         grid += '<div class="cal-cell' + (cell.inMonth ? '' : ' out') + (cell.isToday ? ' is-today' : '') + (cell.date === sel ? ' is-selected' : '') + '" data-action="cal-day" data-date="' + cell.date + '">' +
           '<div class="cal-cell-head"><span class="cal-day-num">' + U.parseDate(cell.date).getDate() + '</span>' + (dayTxs.length ? '<span class="cal-more">' + dayTxs.length + '</span>' : '') + '</div>' +
-          (hol ? '<span class="cal-holiday">' + U.escapeHtml(hol.name) + '</span>' : '') +
+          (hol ? '<span class="cal-holiday cal-holiday-pill" data-date="' + cell.date + '">' + U.escapeHtml(hol.name) + '</span>' : '') +
           '<div class="cal-events">' + dots + '</div>' + schedLabels +
           (dayScheds.length > 2 ? '<span class="cal-more">+' + (dayScheds.length - 2) + ' 日程</span>' : '') +
           '</div>';
@@ -603,6 +616,8 @@
         '<div class="section">' + grid + '</div>' +
         '<div class="day-panel">' + this.dayPanelHtml(sel) + '</div></div>';
     } else if (mode === 'week') {
+      const weekDates = [];
+      for (let i = 0; i < 7; i++) weekDates.push(U.dateAdd(U.startOfWeek(anchor), i));
       let weekHtml = '<div class="view-row grid-7" style="grid-template-columns:repeat(7,minmax(0,1fr));gap:8px">';
       for (let i = 0; i < 7; i++) {
         const d = U.dateAdd(U.startOfWeek(anchor), i);
@@ -610,7 +625,7 @@
         const dayTxs = (byDate[d] || []).slice().sort(function (a, b) { return (a.time || '') < (b.time || '') ? 1 : -1; });
         const dayScheds = [];
   S.schedules.forEach(function (s) { if (U.scheduleOccursOn(s, d)) dayScheds.push(s); });
-        weekHtml += '<div class="section" data-action="cal-day" data-date="' + d + '" style="cursor:pointer;min-height:240px"><div class="section-head"><div><strong>' + (U.parseDate(d).getDate()) + '</strong> <span class="muted small">周' + ['一', '二', '三', '四', '五', '六', '日'][i] + '</span></div>' + (hol ? '<span class="pill danger" style="margin-left:auto">' + U.escapeHtml(hol.name) + '</span>' : '') + '</div>' +
+        weekHtml += '<div class="section" data-action="cal-day" data-date="' + d + '" style="cursor:pointer;min-height:240px"><div class="section-head"><div><strong>' + (U.parseDate(d).getDate()) + '</strong> <span class="muted small">周' + ['一', '二', '三', '四', '五', '六', '日'][i] + '</span></div>' + (hol ? '<span class="pill danger cal-holiday-pill" data-date="' + d + '" style="margin-left:auto">' + U.escapeHtml(hol.name) + '</span>' : '') + '</div>' +
           dayScheds.map(function (s) { return '<span class="pill accent" style="margin:2px">' + U.escapeHtml(s.title) + '</span>'; }).join('') +
       dayTxs.slice(0, 4).map(function (t) { return txRowHtml(t, { detail: true }); }).join('') +
           (dayTxs.length > 4 ? '<div class="muted small">还有 ' + (dayTxs.length - 4) + ' 笔</div>' : '') +
@@ -618,16 +633,19 @@
           '</div>';
       }
       weekHtml += '</div>';
-      mainHtml = weekHtml;
+      mainHtml = '<div class="section"><div class="section-head"><h3>时间格</h3><span class="sub">点击小时块选时间，再次点击直接记账</span></div>' + this.timeGridHtml(weekDates) + '</div>' +
+        weekHtml +
+        '<div class="day-panel" style="margin-top:14px">' + this.dayPanelHtml(sel) + '</div>';
     } else if (mode === 'day') {
       const hol = U.holidayFor(sel);
       const dayTxs = (byDate[sel] || []).slice().sort(function (a, b) { return (a.time || '') < (b.time || '') ? 1 : -1; });
       const dayScheds = [];
   S.schedules.forEach(function (s) { if (U.scheduleOccursOn(s, sel)) dayScheds.push(s); });
       const t = S.totals(dayTxs);
-      mainHtml = '<div class="view-row grid-2">' +
-        '<div class="section"><div class="section-head"><h3>' + U.escapeHtml(U.formatCN(sel, true)) + '</h3>' + (hol ? '<span class="pill danger">' + U.escapeHtml(hol.name) + '</span>' : '') + '</div>' +
-        '<div class="grid-3">' + statCard('收入', U.moneyPlain(t.income), 'success', '', '') + statCard('支出', U.moneyPlain(t.expense), 'danger', '', '') + statCard('结余', U.moneyPlain(t.balance), '', '', '') + '</div>' +
+      mainHtml = '<div class="section"><div class="section-head"><h3>时间格</h3><span class="sub">点击小时块选时间，再次点击直接记账</span></div>' + this.timeGridHtml([sel]) + '</div>' +
+        '<div class="view-row grid-2">' +
+        '<div class="section"><div class="section-head"><h3>' + U.escapeHtml(U.formatCN(sel, true)) + '</h3>' + (hol ? '<span class="pill danger cal-holiday-pill" data-date="' + sel + '">' + U.escapeHtml(hol.name) + '</span>' : '') + '</div>' +
+        '<div class="grid-3">' + statCard('收入', U.moneyPlain(t.income), 'success stat-pop', '', '') + statCard('支出', U.moneyPlain(t.expense), 'danger stat-pop', '', '') + statCard('结余', U.moneyPlain(t.balance), 'accent stat-pop', '', '') + '</div>' +
         '<h4 style="margin:16px 0 8px">账单</h4>' + (dayTxs.map(function (t) { return txRowHtml(t, { detail: true }); }).join('') || '<div class="chart-empty">这一天没有账单</div>') +
         '<h4 style="margin:16px 0 8px">日程与提醒</h4>' + (dayScheds.map(function (s) { return scheduleRowHtml(s, false); }).join('') || '<div class="chart-empty">这一天没有日程</div>') +
         '</div>' +
@@ -666,6 +684,105 @@
       '<div id="calDetail">' + this.calDetailHtml() + '</div>' +
       '<div class="section"><div class="cal-legend"><span><i style="background:#e5484d"></i>支出</span><span><i style="background:#2f9e44"></i>收入</span><span><i style="background:var(--primary)"></i>今日</span><span><i style="background:var(--accent-soft)"></i>日程/提醒</span><span>节日自动提醒（父亲节、母亲节等）</span></div></div>' +
       '</div>';
+
+    U.qsa('.schedule-row').forEach(function (row) {
+      row.addEventListener('dblclick', function () {
+        const btn = row.querySelector('[data-action="edit-schedule"]');
+        if (!btn) return;
+        const sch = S.schedules.find(function (x) { return x.id === btn.getAttribute('data-id'); });
+        if (sch) {
+          Views._editScheduleId = sch.id;
+          window.Modals.openSchedule(sch);
+        }
+      });
+    });
+    U.qsa('.cal-holiday-pill').forEach(function (pill) {
+      pill.addEventListener('dblclick', function () {
+        const date = pill.getAttribute('data-date');
+        if (date) {
+          Views._editScheduleId = null;
+          window.Modals.openSchedule(null, date);
+        }
+      });
+    });
+    Views.attachTimeGrid();
+  };
+
+  Views.timeGridHtml = function (dates) {
+    const byDate = {};
+    S.transactions.forEach(function (t) { if (!byDate[t.date]) byDate[t.date] = []; byDate[t.date].push(t); });
+    const sel = this.calTimeSel;
+    const dowNames = ['一', '二', '三', '四', '五', '六', '日'];
+    function fmtMin(m) { return U.pad2(Math.floor(m / 60)) + ':' + U.pad2(m % 60); }
+    const cols = dates.map(function (date) {
+      const dayTxs = (byDate[date] || []).filter(function (t) { return t.kind === 'expense' || t.kind === 'income'; });
+      const hol = U.holidayFor(date);
+      const dow = (U.parseDate(date).getDay() || 7) - 1;
+      let blocks = '';
+      for (let h = 0; h < 24; h++) {
+        const start = h * 60;
+        const inBlock = dayTxs.filter(function (t) {
+          const p = (t.time || '00:00').split(':');
+          const mins = (+p[0] || 0) * 60 + (+p[1] || 0);
+          return mins >= start && mins < start + 60;
+        });
+        const isSel = sel && sel.date === date && sel.startMin >= start && sel.startMin < start + 60;
+        blocks += '<div class="time-block' + (isSel ? ' is-selected' : '') + '" type="button" data-action="cal-time" data-date="' + date + '" data-start="' + start + '">' +
+          '<span class="time-label">' + U.pad2(h) + ':00</span>' +
+          (inBlock.length ? '<span class="time-dots">' + inBlock.slice(0, 4).map(function (t) { return '<i style="background:' + (t.kind === 'expense' ? '#e5484d' : '#2f9e44') + '"></i>'; }).join('') + '</span>' : '') +
+          (isSel ? '<span class="time-plus">+</span><span class="time-sel-label">' + fmtMin(sel.startMin) + '</span>' : '') +
+          '</div>';
+      }
+      return '<div class="time-col"><div class="time-col-head"><strong>' + U.parseDate(date).getDate() + '</strong><span>周' + dowNames[dow] + '</span>' + (hol ? '<span class="pill danger cal-holiday-pill" data-date="' + date + '">' + U.escapeHtml(hol.name) + '</span>' : '') + '</div>' + blocks + '</div>';
+    }).join('');
+    return '<div class="time-grid' + (dates.length === 1 ? ' single' : '') + '">' + cols + '</div>';
+  };
+
+  Views.attachTimeGrid = function () {
+    const self = this;
+    U.qsa('.time-block.is-selected').forEach(function (block) {
+      let timer = null;
+      let startY = 0;
+      let baseMin = self.calTimeSel ? self.calTimeSel.startMin : 0;
+      let dragging = false;
+      let moved = false;
+      function labelEl() { return block.querySelector('.time-sel-label'); }
+      function fmtMin(m) { return U.pad2(Math.floor(m / 60)) + ':' + U.pad2(m % 60); }
+      block.addEventListener('pointerdown', function (e) {
+        moved = false;
+        dragging = false;
+        startY = e.clientY;
+        baseMin = self.calTimeSel ? self.calTimeSel.startMin : 0;
+        if (block.setPointerCapture) {
+          try { block.setPointerCapture(e.pointerId); } catch (err) {}
+        }
+        timer = setTimeout(function () {
+          dragging = true;
+          block.classList.add('is-dragging');
+          block.setAttribute('data-dragging', '1');
+        }, 260);
+      });
+      block.addEventListener('pointermove', function (e) {
+        if (!dragging || !self.calTimeSel) return;
+        const step = Math.round((e.clientY - startY) / 8) * 15;
+        const newMin = Math.max(0, Math.min(23 * 60 + 45, baseMin + step));
+        self.calTimeSel.startMin = newMin;
+        const el = labelEl();
+        if (el) el.textContent = fmtMin(newMin);
+        moved = true;
+      });
+      function endDrag() {
+        clearTimeout(timer);
+        block.classList.remove('is-dragging');
+        if (moved) {
+          block.setAttribute('data-skip-click', '1');
+          setTimeout(function () { block.removeAttribute('data-skip-click'); }, 500);
+        }
+        dragging = false;
+      }
+      block.addEventListener('pointerup', endDrag);
+      block.addEventListener('pointercancel', endDrag);
+    });
   };
 
   Views.dayPanelHtml = function (date) {
@@ -744,6 +861,7 @@
     const cat = S.categoryById(tx.categoryId);
     const sub = S.subName(tx.categoryId, tx.subcategoryId);
     const detail = S.detailName(tx.categoryId, tx.subcategoryId, tx.detailId);
+    const child = S.detailChildName(tx.categoryId, tx.subcategoryId, tx.detailId, tx.detailChildId);
     const card = tx.cardId ? S.cardById(tx.cardId) : null;
     const cls = tx.kind === 'expense' ? 'expense' : tx.kind === 'income' ? 'income' : '';
     const related = S.transactions.filter(function (t) { return t.categoryId === tx.categoryId && t.id !== tx.id; }).slice(0, 5)
@@ -754,7 +872,7 @@
       '<button class="icon-btn" type="button" data-action="delete-tx" data-id="' + tx.id + '" title="删除">' + U.icon('trash', 16) + '</button></div></div>' +
       '<div class="grid-3">' +
       statCard('金额', U.moneyPlain(tx.amount), cls, '', 'money') +
-      statCard('分类', U.escapeHtml([detail, sub, cat ? cat.name : ''].filter(Boolean).join(' / ')), '', '', 'tags') +
+      statCard('分类', U.escapeHtml([child, detail, sub, cat ? cat.name : ''].filter(Boolean).join(' / ')), '', '', 'tags') +
       statCard('日期', U.formatCN(tx.date, true) + ' ' + tx.time, '', card ? card.name + ' · ' + tx.paymentType : tx.paymentType, 'calendar') +
       '</div>' +
       (tx.note ? '<div class="advice-box accent" style="margin-top:10px">' + U.escapeHtml(tx.note) + '</div>' : '') +
@@ -957,6 +1075,19 @@
     }).join('');
     const bgMode = st.backgroundMode || 'color';
     const bgPreview = st.backgroundMode === 'image' && st.backgroundValue ? '<img src="' + st.backgroundValue + '" alt="背景预览">' : '<span style="background:' + (st.backgroundValue || 'linear-gradient(135deg, var(--primary-soft), var(--accent-soft))') + ';display:block;width:100%;height:100%"></span>';
+    const globalCardId = st.defaultCardId === null ? '' : (st.defaultCardId || (S.cards.length ? S.cards[0].id : ''));
+    const cardSelect = function (cur) {
+      return '<option value="">不使用卡片</option>' + S.cards.map(function (c) {
+        return '<option value="' + c.id + '"' + (cur === c.id ? ' selected' : '') + '>' + U.escapeHtml(c.name) + '</option>';
+      }).join('');
+    };
+    const catCardRows = S.categories.map(function (c) {
+      const cur = Object.prototype.hasOwnProperty.call(c, 'defaultCardId') ? (c.defaultCardId || '') : globalCardId;
+      return '<div class="setting-row"><div class="info"><strong>' + U.escapeHtml(c.name) + '</strong><span>选择该分类时自动使用的卡片</span></div><select data-action="default-card" data-cat-id="' + c.id + '" style="width:auto">' + cardSelect(cur) + '</select></div>';
+    }).join('');
+    const defaultCardHtml = '<div class="section"><div class="section-head"><h3>默认卡片</h3><span class="sub">记账时按分类自动带出卡片</span></div>' +
+      '<div class="setting-row"><div class="info"><strong>全局默认</strong><span>分类没有单独设置时使用</span></div><select data-action="default-card" data-cat-id="global" style="width:auto">' + cardSelect(globalCardId) + '</select></div>' +
+      catCardRows + '</div>';
 
     U.qs('#viewContent').innerHTML =
       '<div class="view-stack">' +
@@ -985,7 +1116,9 @@
       '<div class="section"><div class="section-head"><h3>提醒</h3></div>' +
       '<div class="setting-row"><div class="info"><strong>节日提醒</strong><span>父亲节、母亲节、生日等自动提醒记账</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="holidayReminders"' + (st.holidayReminders !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
       '<div class="setting-row"><div class="info"><strong>俏皮提醒</strong><span>阈值提醒使用更有趣的文案</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="playfulReminders"' + (st.playfulReminders !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
-      '<div class="setting-row"><div class="info"><strong>提示消息</strong><span>记账成功、金额错误等轻提示，可上滑或用右上角 × 关闭；关闭后不再显示</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="showToasts"' + (st.showToasts !== false ? ' checked' : '') + '><span class="track"></span></label></div></div>' +
+      '<div class="setting-row"><div class="info"><strong>提示消息</strong><span>记账成功、金额错误等轻提示，可上滑或用右上角 × 关闭；关闭后不再显示</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="showToasts"' + (st.showToasts !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
+      '<div class="setting-row"><div class="info"><strong>回车提交</strong><span>输入名称等单行内容时按回车直接保存</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="enterToSubmit"' + (st.enterToSubmit !== false ? ' checked' : '') + '><span class="track"></span></label></div></div>' +
+      defaultCardHtml +
 
       '<div class="view-row grid-2">' +
       '<div class="section"><div class="section-head"><h3>账号</h3></div>' +

@@ -126,6 +126,7 @@
     V.calAnchor = U.todayStr();
     V.calSelected = U.todayStr();
     V.calDetail = null;
+    V.calTimeSel = null;
     V.cardsSelected = null;
     V.goalsAnchor = U.todayStr();
     V.categoriesTab = 'expense';
@@ -155,13 +156,21 @@
     const kind = f.type === 'income' ? 'income' : 'expense';
     let catId = f.catId;
     let subId = f.subId;
+    if (f.multi) {
+      if (!f.selections.length) { V.toast('缺分类', '请先选择至少一个分类', 'danger'); return; }
+      if (f.selections.length > 1) { saveMultiTx(); return; }
+      catId = f.selections[0].catId;
+      subId = f.selections[0].subId || null;
+    }
     const cats = S.categoriesByType(f.type);
     if (!catId || !cats.some(function (c) { return c.id === catId; })) catId = cats.length ? cats[0].id : null;
     const cat = S.categoryById(catId);
     if (cat && !(cat.subs || []).some(function (s) { return s.id === subId; })) subId = cat.subs.length ? cat.subs[0].id : null;
     if (!catId) { V.toast('缺分类', '请先创建对应的分类', 'danger'); return; }
     const sub = S.subById(catId, subId);
-    const detailId = sub && (sub.children || []).some(function (d) { return d.id === f.detailId; }) ? f.detailId : null;
+    const detailId = f.multi && f.selections.length === 1 ? f.selections[0].detailId || null : (sub && (sub.children || []).some(function (d) { return d.id === f.detailId; }) ? f.detailId : null);
+    const detail = S.detailById(catId, subId, detailId);
+    const detailChildId = f.multi && f.selections.length === 1 ? (f.selections[0].detailChildId || null) : (detail && (detail.children || []).some(function (x) { return x.id === f.detailChildId; }) ? f.detailChildId : null);
     const payload = {
       id: f.editing || U.uid('tx'),
       kind: kind,
@@ -169,6 +178,7 @@
       categoryId: catId,
       subcategoryId: subId,
       detailId: detailId,
+      detailChildId: detailChildId,
       cardId: U.qs('#txCard').value || null,
       paymentType: U.qs('#txPayment').value,
       date: U.qs('#txDate').value || U.todayStr(),
@@ -185,6 +195,45 @@
       S.addTransaction(payload);
       V.toast('记好了', (kind === 'income' ? '收入 ' : '支出 ') + U.moneyPlain(amount) + ' 已入账', 'success');
     }
+    M.close();
+    V.refresh();
+  }
+
+  function saveMultiTx() {
+    const f = V._txForm;
+    const amount = parseFloat(U.qs('#txAmount').value);
+    if (!amount || amount <= 0) { V.toast('金额不对', '请输入大于 0 的金额', 'danger'); return; }
+    const kind = f.type === 'income' ? 'income' : 'expense';
+    const splits = f.selections.map(function (s) {
+      return { amount: s.amount > 0 ? U.round2(s.amount) : null, catId: s.catId, subId: s.subId || null, detailId: s.detailId || null };
+    });
+    if (splits.some(function (s) { return !s.amount; })) { V.toast('拆分金额不对', '请给每个分类填写大于 0 的金额', 'danger'); return; }
+    const sum = splits.reduce(function (a, s) { return a + s.amount; }, 0);
+    const diff = U.round2(amount - sum);
+    if (Math.abs(diff) > 0.01) { V.toast('金额不一致', '拆分金额合计应与总金额一致', 'danger'); return; }
+    splits[splits.length - 1].amount = U.round2(splits[splits.length - 1].amount + diff);
+    const base = {
+      kind: kind,
+      cardId: U.qs('#txCard').value || null,
+      paymentType: U.qs('#txPayment').value,
+      date: U.qs('#txDate').value || U.todayStr(),
+      time: U.qs('#txTime').value || '12:00',
+      note: U.qs('#txNote').value.trim(),
+      mood: f.mood,
+      photo: f.photo,
+      createdAt: new Date().toISOString()
+    };
+    splits.forEach(function (s) {
+      S.addTransaction(Object.assign({}, base, {
+        id: U.uid('tx'),
+        amount: s.amount,
+        categoryId: s.catId,
+        subcategoryId: s.subId,
+        detailId: s.detailId,
+        detailChildId: s.detailChildId || null
+      }));
+    });
+    V.toast('记好了', (kind === 'income' ? '收入 ' : '支出 ') + U.moneyPlain(amount) + ' 已拆成 ' + splits.length + ' 笔入账', 'success');
     M.close();
     V.refresh();
   }
@@ -435,26 +484,147 @@
     switch (action) {
       case 'close-modal': M.close(); break;
 
+      case 'tx-multi':
+        if (V._txForm.editing) { V.toast('暂不支持', '编辑已有账单时请使用单分类', 'warn'); break; }
+        V._txForm.multi = !V._txForm.multi;
+        if (V._txForm.multi) {
+          if (!V._txForm.selections.length) {
+            const cats = S.categoriesByType(V._txForm.type);
+            if (!V._txForm.catId && cats.length) V._txForm.catId = cats[0].id;
+            const cat = S.categoryById(V._txForm.catId);
+            V._txForm.selections = [{ catId: V._txForm.catId, subId: cat && cat.subs.length ? cat.subs[0].id : null, detailId: null, amount: 0 }];
+          }
+          const total = parseFloat(U.qs('#txAmount').value);
+          const n = V._txForm.selections.length;
+          if (total > 0 && n > 1) V._txForm.selections.forEach(function (s) { s.amount = Math.round(total / n * 100) / 100; });
+        } else {
+          V._txForm.selections = [];
+        }
+        M.updateTxUi();
+        break;
       case 'tx-type':
         V._txForm.type = val('data-type');
         V._txForm.catId = null; V._txForm.subId = null;
         V._txForm.subEdit = null; V._txForm.detailId = null; V._txForm.detailEdit = null;
+        V._txForm.detailChildId = null; V._txForm.detailChildEdit = null; V._txForm.catEdit = null;
+        V._txForm.multi = false; V._txForm.selections = [];
         M.updateTxUi();
+        M.applyDefaultCard();
         break;
       case 'tx-cat':
-        V._txForm.catId = val('data-cat-id');
-        V._txForm.subId = null;
         V._txForm.subEdit = null; V._txForm.detailId = null; V._txForm.detailEdit = null;
-        M.updateTxUi();
+        V._txForm.detailChildId = null; V._txForm.detailChildEdit = null;
+        V._txForm.catEdit = null;
+        if (V._txForm.multi) {
+          const catId = val('data-cat-id');
+          const has = V._txForm.selections.some(function (s) { return s.catId === catId; });
+          if (has) {
+            V._txForm.selections = V._txForm.selections.filter(function (s) { return s.catId !== catId; });
+          } else {
+            const c = S.categoryById(catId);
+            V._txForm.selections.push({ catId: catId, subId: c && c.subs.length ? c.subs[0].id : null, detailId: null, amount: 0 });
+          }
+          V._txForm.catId = catId;
+          M.updateTxUi();
+          M.applyDefaultCard();
+        } else {
+          V._txForm.catId = val('data-cat-id');
+          V._txForm.subId = null;
+          M.updateTxUi();
+          M.applyDefaultCard();
+        }
         break;
       case 'tx-sub':
-        V._txForm.subId = val('data-sub-id');
         V._txForm.detailId = null; V._txForm.detailEdit = null;
-        M.updateTxUi();
+        V._txForm.detailChildId = null; V._txForm.detailChildEdit = null;
+        if (V._txForm.multi) {
+          const catId = val('data-cat-id') || V._txForm.catId;
+          const subId = val('data-sub-id');
+          const has = V._txForm.selections.some(function (s) { return s.catId === catId && s.subId === subId; });
+          if (has) {
+            V._txForm.selections = V._txForm.selections.filter(function (s) { return !(s.catId === catId && s.subId === subId); });
+          } else {
+            V._txForm.selections = V._txForm.selections.filter(function (s) { return s.catId !== catId; });
+            V._txForm.selections.push({ catId: catId, subId: subId, detailId: null, amount: 0 });
+          }
+          V._txForm.subId = subId;
+          M.updateTxUi();
+        } else {
+          V._txForm.subId = val('data-sub-id');
+          M.updateTxUi();
+        }
         break;
       case 'tx-detail':
-        V._txForm.detailId = val('data-detail-id');
+        V._txForm.detailChildId = null; V._txForm.detailChildEdit = null;
+        if (V._txForm.multi) {
+          const catId = val('data-cat-id') || V._txForm.catId;
+          const subId = val('data-sub-id') || V._txForm.subId;
+          const detailId = val('data-detail-id');
+          const item = V._txForm.selections.find(function (s) { return s.catId === catId && s.subId === subId; });
+          if (item && item.detailId === detailId) item.detailId = null;
+          else if (item) item.detailId = detailId;
+          else V._txForm.selections.push({ catId: catId, subId: subId, detailId: detailId, amount: 0 });
+          V._txForm.detailId = detailId;
+          M.updateTxUi();
+        } else {
+          V._txForm.detailId = val('data-detail-id');
+          M.updateTxUi();
+        }
+        break;
+      case 'tx-detailchild':
+        V._txForm.detailChildId = val('data-detail-child-id');
         M.updateTxUi();
+        break;
+      case 'tx-cat-add':
+        V._txForm.catEdit = { mode: 'add', catId: null };
+        M.renderCatEditor();
+        break;
+      case 'tx-cat-edit':
+        if (!V._txForm.catId) { V.toast('缺分类', '请先选择一个大类', 'danger'); break; }
+        V._txForm.catEdit = { mode: 'edit', catId: V._txForm.catId };
+        M.renderCatEditor();
+        break;
+      case 'tx-cat-save': {
+        const f = V._txForm;
+        if (!f.catEdit) break;
+        const name = U.qs('#catEditName').value.trim();
+        if (!name) { V.toast('缺名称', '请输入大类名称', 'danger'); break; }
+        const icon = U.qs('#catEditIcon').value.trim() || '📦';
+        const color = U.qs('#catEditColor').value;
+        const cat = f.catEdit.catId ? S.categoryById(f.catEdit.catId) : null;
+        if (cat) {
+          cat.name = name;
+          cat.icon = icon;
+          cat.color = color;
+          S.updateCategory(cat);
+        } else {
+          const nc = { id: U.uid('cat'), name: name, icon: icon, color: color, type: f.type, system: false, subs: [] };
+          S.addCategory(nc);
+          f.catId = nc.id;
+          if (f.multi) f.selections = [{ catId: nc.id, subId: null, detailId: null, amount: 0 }];
+        }
+        f.catEdit = null;
+        M.updateTxUi();
+        M.applyDefaultCard();
+        V.toast('大类已' + (cat ? '更新' : '创建'), name, 'success');
+        break;
+      }
+      case 'tx-cat-cancel':
+        V._txForm.catEdit = null;
+        M.updateTxUi();
+        break;
+      case 'tx-cat-delete':
+        confirmAction('删除大类', '已有账单会转移到其他分类，确定删除这个大类吗？', function () {
+          const f = V._txForm;
+          const catId = f.catEdit && f.catEdit.catId;
+          if (!catId) return;
+          S.deleteCategory(catId);
+          if (f.catId === catId) f.catId = null;
+          f.selections = f.selections.filter(function (s) { return s.catId !== catId; });
+          f.catEdit = null;
+          M.updateTxUi();
+          V.toast('已删除', '大类已移除', 'success');
+        });
         break;
       case 'tx-detail-add':
         V._txForm.detailEdit = { mode: 'add', detailId: null };
@@ -483,6 +653,8 @@
           sub.children.push(nd);
           f.detailId = nd.id;
         }
+        f.detailChildId = null;
+        f.detailChildEdit = null;
         const cat = S.categoryById(f.catId);
         if (cat) S.updateCategory(cat);
         f.detailEdit = null;
@@ -503,9 +675,67 @@
             sub.children = (sub.children || []).filter(function (d) { return d.id !== f.detailEdit.detailId; });
             S.updateCategory(cat);
             f.detailId = null;
+            f.detailChildId = null;
+            f.detailChildEdit = null;
             f.detailEdit = null;
             M.updateTxUi();
             V.toast('已删除', '细分类已移除', 'success');
+          }
+        });
+        break;
+      case 'tx-detailchild-add':
+        V._txForm.detailChildEdit = { mode: 'add', childId: null };
+        M.renderDetailChildEditor();
+        break;
+      case 'tx-detailchild-edit': {
+        const sub = S.subById(V._txForm.catId, V._txForm.subId);
+        const detail = sub ? S.detailById(V._txForm.catId, V._txForm.subId, V._txForm.detailId) : null;
+        const cur = detail && (detail.children || []).find(function (x) { return x.id === V._txForm.detailChildId; });
+        V._txForm.detailChildEdit = { mode: 'edit', childId: cur ? cur.id : null };
+        M.renderDetailChildEditor();
+        break;
+      }
+      case 'tx-detailchild-save': {
+        const f = V._txForm;
+        const sub = S.subById(f.catId, f.subId);
+        const detail = sub ? S.detailById(f.catId, f.subId, f.detailId) : null;
+        if (!sub || !detail || !f.detailChildEdit) break;
+        const name = U.qs('#detailChildEditName').value.trim();
+        if (!name) { V.toast('缺名称', '请输入小类名称', 'danger'); break; }
+        const color = U.qs('#detailChildEditColor').value;
+        if (!Array.isArray(detail.children)) detail.children = [];
+        if (f.detailChildEdit.mode === 'edit' && f.detailChildEdit.childId) {
+          const x = detail.children.find(function (y) { return y.id === f.detailChildEdit.childId; });
+          if (x) { x.name = name; x.color = color; }
+        } else {
+          const nx = { id: U.uid('detailchild'), name: name, color: color };
+          detail.children.push(nx);
+          f.detailChildId = nx.id;
+        }
+        const cat = S.categoryById(f.catId);
+        if (cat) S.updateCategory(cat);
+        f.detailChildEdit = null;
+        M.updateTxUi();
+        V.toast('小类已保存', name, 'success');
+        break;
+      }
+      case 'tx-detailchild-cancel':
+        V._txForm.detailChildEdit = null;
+        M.updateTxUi();
+        break;
+      case 'tx-detailchild-delete':
+        confirmAction('删除小类', '删除后不影响已有账单，确定删除这个小类吗？', function () {
+          const f = V._txForm;
+          const sub = S.subById(f.catId, f.subId);
+          const detail = sub ? S.detailById(f.catId, f.subId, f.detailId) : null;
+          const cat = S.categoryById(f.catId);
+          if (sub && detail && cat) {
+            detail.children = (detail.children || []).filter(function (x) { return x.id !== f.detailChildEdit.childId; });
+            S.updateCategory(cat);
+            f.detailChildId = null;
+            f.detailChildEdit = null;
+            M.updateTxUi();
+            V.toast('已删除', '小类已移除', 'success');
           }
         });
         break;
@@ -534,6 +764,8 @@
           const ns = { id: U.uid('sub'), name: name, color: color };
           cat.subs.push(ns);
           f.subId = ns.id;
+          f.detailId = null;
+          f.detailChildId = null;
         }
         S.updateCategory(cat);
         f.subEdit = null;
@@ -578,6 +810,9 @@
         if (tx) M.openAddTx(tx);
         break;
       }
+      case 'bills-add':
+        M.openAddTx(null, val('data-date'));
+        break;
       case 'delete-tx':
         confirmAction('删除账单', '确定删除这笔账单吗？卡片余额会随之变化。', function () {
           S.deleteTransaction(val('data-id'));
@@ -976,6 +1211,7 @@
       case 'cal-mode':
         V.calMode = val('data-mode');
         V.calDetail = null;
+        V.calTimeSel = null;
         V.renderCalendar();
         break;
       case 'cal-prev':
@@ -984,6 +1220,7 @@
         else if (V.calMode === 'week') V.calAnchor = U.dateAdd(V.calAnchor, -7);
         else V.calAnchor = U.dateAdd(V.calAnchor, -1);
         V.calDetail = null;
+        V.calTimeSel = null;
         V.renderCalendar();
         break;
       case 'cal-next':
@@ -992,12 +1229,14 @@
         else if (V.calMode === 'week') V.calAnchor = U.dateAdd(V.calAnchor, 7);
         else V.calAnchor = U.dateAdd(V.calAnchor, 1);
         V.calDetail = null;
+        V.calTimeSel = null;
         V.renderCalendar();
         break;
       case 'cal-today':
         V.calAnchor = U.todayStr();
         V.calSelected = U.todayStr();
         V.calDetail = null;
+        V.calTimeSel = null;
         V.renderCalendar();
         break;
       case 'cal-day': {
@@ -1005,6 +1244,7 @@
         if (!date) break;
         V.calSelected = date;
         V.calDetail = null;
+        V.calTimeSel = null;
         if (V.calMode === 'month' && !U.sameMonth(date, V.calAnchor)) {
           V.calAnchor = U.startOfMonth(date);
         }
@@ -1016,6 +1256,28 @@
           V.calAnchor = U.startOfMonth(date);
         }
         V.renderCalendar();
+        break;
+      }
+      case 'cal-time': {
+        if (el.getAttribute('data-skip-click')) {
+          el.removeAttribute('data-skip-click');
+          break;
+        }
+        const date = val('data-date');
+        const start = +val('data-start');
+        const sel = V.calTimeSel;
+        if (sel && sel.date === date && sel.startMin >= start && sel.startMin < start + 60) {
+          V.calSelected = date;
+          const openMin = sel.startMin;
+          V.calTimeSel = null;
+          M.openAddTx(null, date);
+          const timeInput = U.qs('#txTime');
+          if (timeInput) timeInput.value = U.pad2(Math.floor(openMin / 60)) + ':' + U.pad2(openMin % 60);
+        } else {
+          V.calTimeSel = { date: date, startMin: start };
+          V.calSelected = date;
+          V.renderCalendar();
+        }
         break;
       }
       case 'cal-detail':
@@ -1128,10 +1390,36 @@
       V.renderBillsList();
       return;
     }
+    const defaultCard = target.closest('[data-action="default-card"]');
+    if (defaultCard) {
+      const catId = defaultCard.getAttribute('data-cat-id');
+      const cardId = target.value;
+      if (catId === 'global') {
+        S.updateSettings({ defaultCardId: cardId || null });
+      } else {
+        const cat = S.categoryById(catId);
+        if (cat) {
+          cat.defaultCardId = cardId || null;
+          S.updateCategory(cat);
+        }
+      }
+      return;
+    }
     const toggle = target.closest('[data-action="toggle-setting"]');
     if (toggle) {
       S.updateSettings({ [toggle.getAttribute('data-key')]: target.checked });
       return;
+    }
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.target.tagName !== 'INPUT' || S.settings.enterToSubmit === false) return;
+    const modal = e.target.closest('.modal');
+    if (!modal) return;
+    const saveBtn = modal.querySelector('.modal-foot .primary-btn, .modal-foot .danger-btn');
+    if (saveBtn && !saveBtn.disabled) {
+      e.preventDefault();
+      saveBtn.click();
     }
   });
 

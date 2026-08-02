@@ -76,6 +76,8 @@
     holidayReminders: true,
     playfulReminders: true,
     showToasts: true,
+    enterToSubmit: true,
+    defaultCardId: '',
     currencySymbol: '¥'
   };
 
@@ -500,6 +502,14 @@
     detailName: function (catId, subId, detailId) {
       const d = this.detailById(catId, subId, detailId);
       return d ? d.name : '';
+    },
+    detailChildById: function (catId, subId, detailId, childId) {
+      const d = this.detailById(catId, subId, detailId);
+      return d ? (d.children || []).find(function (x) { return x.id === childId; }) : null;
+    },
+    detailChildName: function (catId, subId, detailId, childId) {
+      const x = this.detailChildById(catId, subId, detailId, childId);
+      return x ? x.name : '';
     },
 
     categoriesByType: function (type) {

@@ -46,18 +46,27 @@
     },
 
     // ---------- 记一笔 ----------
-    openAddTx: function (tx) {
+    openAddTx: function (tx, presetDate) {
       const V = window.Views;
       V._txForm = {
         type: tx ? (tx.kind === 'income' ? 'income' : 'expense') : 'expense',
         catId: tx ? tx.categoryId : null,
         subId: tx ? tx.subcategoryId : null,
+        detailId: tx ? tx.detailId : null,
+        detailChildId: tx ? tx.detailChildId : null,
         mood: tx ? tx.mood : null,
         photo: tx ? tx.photo : null,
-        editing: tx ? tx.id : null
+        editing: tx ? tx.id : null,
+        multi: false,
+        selections: [],
+        detailEdit: null,
+        detailChildEdit: null,
+        subEdit: null,
+        catEdit: null
       };
+      const defaultCardId = tx ? tx.cardId : (S.settings.defaultCardId === null ? '' : (S.settings.defaultCardId || (S.cards.length ? S.cards[0].id : '')));
       const cardsOpts = S.cards.map(function (c) {
-        return '<option value="' + c.id + '"' + (tx && tx.cardId === c.id ? ' selected' : '') + '>' + U.escapeHtml(c.name) + '</option>';
+        return '<option value="' + c.id + '"' + (defaultCardId === c.id ? ' selected' : '') + '>' + U.escapeHtml(c.name) + '</option>';
       }).join('');
       const html =
         '<div class="modal-head"><h3>' + (tx ? '编辑账单' : '记一笔') + '</h3><button class="icon-btn" type="button" data-action="close-modal">' + U.icon('x', 18) + '</button></div>' +
@@ -66,7 +75,13 @@
         '<button type="button" data-action="tx-type" data-type="expense"' + (V._txForm.type === 'expense' ? ' class="is-active"' : '') + '>支出</button>' +
         '<button type="button" data-action="tx-type" data-type="income"' + (V._txForm.type === 'income' ? ' class="is-active"' : '') + '>收入</button></div>' +
         '<div class="amount-input"><span class="cur">' + U.escapeHtml(S.settings.currencySymbol || '¥') + '</span><input id="txAmount" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0.00" value="' + (tx ? tx.amount : '') + '"></div>' +
+        '<div class="toolbar" style="margin-top:2px"><button class="ghost-btn compact" type="button" data-action="tx-multi">' + U.icon('tags', 15) + ' 多分类</button><span class="muted small" id="txMultiHint"></span></div>' +
+        '<div id="txSplitBox"></div>' +
         '<div class="field"><span>分类（点击可钻取小类）</span><div class="chip-grid" id="txCats"></div></div>' +
+        '<div class="toolbar" style="margin-top:-4px">' +
+        '<button class="ghost-btn compact" type="button" data-action="tx-cat-add">' + U.icon('plus', 14) + ' 新增大类</button>' +
+        '<button class="ghost-btn compact" type="button" data-action="tx-cat-edit">' + U.icon('edit', 14) + ' 编辑当前</button></div>' +
+        '<div id="txCatEditor"></div>' +
         '<div class="field"><span>小类</span><div class="chip-grid" id="txSubs"></div></div>' +
         '<div class="toolbar" style="margin-top:-6px">' +
         '<button class="ghost-btn compact" type="button" data-action="tx-sub-add">' + U.icon('plus', 14) + ' 新增小类</button>' +
@@ -75,11 +90,15 @@
         '<div class="field" id="txDetailField"><span>细分类（可再分一级）</span><div class="chip-grid" id="txDetails"></div>' +
         '<div class="toolbar" style="margin-top:6px"><button class="ghost-btn compact" type="button" data-action="tx-detail-add">' + U.icon('plus', 14) + ' 新增细类</button>' +
         '<button class="ghost-btn compact" type="button" data-action="tx-detail-edit">' + U.icon('edit', 14) + ' 编辑当前</button></div>' +
-        '<div id="txDetailEditor"></div></div>' +
+        '<div id="txDetailEditor"></div>' +
+        '<div class="field" id="txDetailChildField"><span>小类（细分类下）</span><div class="chip-grid" id="txDetailChilds"></div>' +
+        '<div class="toolbar" style="margin-top:6px"><button class="ghost-btn compact" type="button" data-action="tx-detailchild-add">' + U.icon('plus', 14) + ' 新增小类</button>' +
+        '<button class="ghost-btn compact" type="button" data-action="tx-detailchild-edit">' + U.icon('edit', 14) + ' 编辑当前</button></div>' +
+        '<div id="txDetailChildEditor"></div></div></div>' +
         '<div class="form-grid">' +
         '<div class="field"><span>收支方式</span><select id="txPayment"><option value="现金"' + (tx && tx.paymentType === '现金' ? ' selected' : '') + '>现金</option><option value="电子"' + (!tx || tx.paymentType === '电子' ? ' selected' : '') + '>电子</option></select></div>' +
         '<div class="field"><span>关联卡片（可选）</span><select id="txCard"><option value="">不使用卡片</option>' + cardsOpts + '</select></div>' +
-        '<div class="field"><span>日期</span><input id="txDate" type="date" value="' + (tx ? tx.date : U.todayStr()) + '"></div>' +
+        '<div class="field"><span>日期</span><input id="txDate" type="date" value="' + (tx ? tx.date : presetDate || U.todayStr()) + '"></div>' +
         '<div class="field"><span>时间</span><input id="txTime" type="time" value="' + (tx ? tx.time : U.nowTimeStr()) + '"></div>' +
         '</div>' +
         '<div class="field"><span>心情</span><div class="mood-row" id="txMoods">' +
@@ -93,6 +112,7 @@
       this.open(html, {
         onMount: function () {
           Modals.updateTxUi();
+          Modals.applyDefaultCard();
           const input = U.qs('#txPhotoInput');
           if (input) {
             input.addEventListener('change', function () {
@@ -112,42 +132,188 @@
       const V = window.Views;
       const f = V._txForm;
       const cats = S.categoriesByType(f.type);
-      if (!f.catId || !cats.some(function (c) { return c.id === f.catId; })) {
-        f.catId = cats.length ? cats[0].id : null;
-        f.subId = cats.length && cats[0].subs.length ? cats[0].subs[0].id : null;
+      if (!f.multi) {
+        if (!f.catId || !cats.some(function (c) { return c.id === f.catId; })) {
+          f.catId = cats.length ? cats[0].id : null;
+          f.subId = cats.length && cats[0].subs.length ? cats[0].subs[0].id : null;
+        }
+      } else if (!f.selections.length && cats.length) {
+        f.selections.push({ catId: cats[0].id, subId: cats[0].subs.length ? cats[0].subs[0].id : null, detailId: null, amount: 0 });
       }
       const catBox = U.qs('#txCats');
       if (catBox) {
         catBox.innerHTML = cats.map(function (c) {
-          return '<button class="cat-chip' + (f.catId === c.id ? ' is-active' : '') + '" type="button" data-action="tx-cat" data-cat-id="' + c.id + '"><span class="dot" style="background:' + c.color + '"></span>' + U.escapeHtml(c.icon + ' ' + c.name) + '</button>';
+          const active = f.multi ? f.selections.some(function (s) { return s.catId === c.id; }) : f.catId === c.id;
+          return '<button class="cat-chip' + (active ? ' is-active' : '') + '" type="button" data-action="tx-cat" data-cat-id="' + c.id + '"><span class="dot" style="background:' + c.color + '"></span>' + U.escapeHtml(c.icon + ' ' + c.name) + '</button>';
         }).join('');
       }
       const cat = S.categoryById(f.catId);
-      const subs = cat ? cat.subs : [];
-      if (!subs.some(function (s) { return s.id === f.subId; })) f.subId = subs.length ? subs[0].id : null;
+      const subs = f.multi ? [] : (cat ? cat.subs : []);
+      if (!f.multi && !subs.some(function (s) { return s.id === f.subId; })) f.subId = subs.length ? subs[0].id : null;
       const subBox = U.qs('#txSubs');
       if (subBox) {
-        subBox.innerHTML = subs.map(function (s) {
-          return '<button class="cat-chip small' + (f.subId === s.id ? ' is-active' : '') + '" type="button" data-action="tx-sub" data-sub-id="' + s.id + '"><span class="dot" style="background:' + s.color + '"></span>' + U.escapeHtml(s.name) + '</button>';
-        }).join('') || '<span class="muted small">该分类暂无小类</span>';
+        if (f.multi) {
+          const selCats = cats.filter(function (c) { return f.selections.some(function (s) { return s.catId === c.id; }); });
+          let html = '';
+          selCats.forEach(function (c) {
+            (c.subs || []).forEach(function (s) {
+              const active = f.selections.some(function (x) { return x.catId === c.id && x.subId === s.id; });
+              html += '<button class="cat-chip small' + (active ? ' is-active' : '') + '" type="button" data-action="tx-sub" data-cat-id="' + c.id + '" data-sub-id="' + s.id + '" title="双击取消小类并编辑大类">' +
+                '<span class="dot" style="background:' + s.color + '"></span>' + (selCats.length > 1 ? U.escapeHtml(c.name + ' · ') : '') + U.escapeHtml(s.name) + '</button>';
+            });
+          });
+          subBox.innerHTML = html || '<span class="muted small">先选择分类</span>';
+        } else {
+          subBox.innerHTML = subs.map(function (s) {
+            return '<button class="cat-chip small' + (f.subId === s.id ? ' is-active' : '') + '" type="button" data-action="tx-sub" data-sub-id="' + s.id + '"><span class="dot" style="background:' + s.color + '"></span>' + U.escapeHtml(s.name) + '</button>';
+          }).join('') || '<span class="muted small">该分类暂无小类</span>';
+        }
       }
-      const sub = S.subById(f.catId, f.subId);
-      const details = sub ? (sub.children || []) : [];
-      if (!details.some(function (d) { return d.id === f.detailId; })) f.detailId = details.length ? details[0].id : null;
+      U.qsa('#txSubs .cat-chip').forEach(function (b) {
+        b.addEventListener('dblclick', function () {
+          const catId = b.getAttribute('data-cat-id') || V._txForm.catId;
+          const subId = b.getAttribute('data-sub-id');
+          if (V._txForm.multi && subId) {
+            V._txForm.selections = V._txForm.selections.filter(function (s) { return !(s.catId === catId && s.subId === subId); });
+          }
+          V._txForm.subId = null;
+          V._txForm.detailId = null;
+          V._txForm.detailChildId = null;
+          V._txForm.subEdit = null;
+          V._txForm.detailEdit = null;
+          V._txForm.catEdit = { mode: 'edit', catId: catId };
+          M.updateTxUi();
+        });
+      });
+      const sub = f.multi ? null : S.subById(f.catId, f.subId);
+      const details = f.multi ? [] : (sub ? (sub.children || []) : []);
+      if (!f.multi && !details.some(function (d) { return d.id === f.detailId; })) f.detailId = details.length ? details[0].id : null;
       const detailField = U.qs('#txDetailField');
-      if (detailField) detailField.classList.toggle('hidden', !sub || !details.length);
       const detailBox = U.qs('#txDetails');
       if (detailBox) {
-        detailBox.innerHTML = details.map(function (d) {
-          return '<button class="cat-chip small' + (f.detailId === d.id ? ' is-active' : '') + '" type="button" data-action="tx-detail" data-detail-id="' + d.id + '"><span class="dot" style="background:' + d.color + '"></span>' + U.escapeHtml(d.name) + '</button>';
-        }).join('');
+        if (f.multi) {
+          const selSubs = [];
+          f.selections.forEach(function (s) {
+            if (!s.subId) return;
+            const ss = S.subById(s.catId, s.subId);
+            if (ss) selSubs.push({ catId: s.catId, sub: ss });
+          });
+          let html = '';
+          selSubs.forEach(function (x) {
+            (x.sub.children || []).forEach(function (d) {
+              const active = f.selections.some(function (sel) { return sel.catId === x.catId && sel.subId === x.sub.id && sel.detailId === d.id; });
+              html += '<button class="cat-chip small' + (active ? ' is-active' : '') + '" type="button" data-action="tx-detail" data-cat-id="' + x.catId + '" data-sub-id="' + x.sub.id + '" data-detail-id="' + d.id + '">' +
+                '<span class="dot" style="background:' + d.color + '"></span>' + U.escapeHtml(d.name) + '</button>';
+            });
+          });
+          detailBox.innerHTML = html || '<span class="muted small">先选择小类</span>';
+          if (detailField) detailField.classList.toggle('hidden', !html);
+        } else {
+          detailBox.innerHTML = details.map(function (d) {
+            return '<button class="cat-chip small' + (f.detailId === d.id ? ' is-active' : '') + '" type="button" data-action="tx-detail" data-detail-id="' + d.id + '"><span class="dot" style="background:' + d.color + '"></span>' + U.escapeHtml(d.name) + '</button>';
+          }).join('');
+          if (detailField) detailField.classList.toggle('hidden', !sub || !details.length);
+        }
       }
+      const childField = U.qs('#txDetailChildField');
+      const childBox = U.qs('#txDetailChilds');
+      if (childBox) {
+        const detail = !f.multi && sub ? S.detailById(f.catId, f.subId, f.detailId) : null;
+        if (detail) {
+          const children = detail.children || [];
+          if (!children.some(function (x) { return x.id === f.detailChildId; })) f.detailChildId = children.length ? children[0].id : null;
+          childBox.innerHTML = children.map(function (x) {
+            return '<button class="cat-chip small' + (f.detailChildId === x.id ? ' is-active' : '') + '" type="button" data-action="tx-detailchild" data-detail-child-id="' + x.id + '"><span class="dot" style="background:' + x.color + '"></span>' + U.escapeHtml(x.name) + '</button>';
+          }).join('') || '<span class="muted small">该细分类暂无小类</span>';
+          if (childField) childField.classList.toggle('hidden', !children.length);
+        } else {
+          childBox.innerHTML = '';
+          if (childField) childField.classList.add('hidden');
+        }
+      }
+      const hint = U.qs('#txMultiHint');
+      if (hint) hint.textContent = f.multi ? '可同时选择多个分类和小类' : '';
+      Modals.renderSplitList();
       Modals.renderDetailEditor();
+      Modals.renderDetailChildEditor();
+      Modals.renderCatEditor();
       Modals.renderSubEditor();
       U.qsa('.modal [data-action="tx-type"]').forEach(function (b) {
         b.classList.toggle('is-active', b.getAttribute('data-type') === f.type);
       });
+      U.qsa('.modal [data-action="tx-multi"]').forEach(function (b) {
+        b.classList.toggle('is-active', !!f.multi);
+      });
       Modals.updatePhotoPreview();
+    },
+
+    renderSplitList: function () {
+      const V = window.Views;
+      const f = V._txForm;
+      const box = U.qs('#txSplitBox');
+      if (!box) return;
+      if (!f.multi || f.selections.length < 2) {
+        box.classList.add('hidden');
+        box.innerHTML = '';
+        return;
+      }
+      box.classList.remove('hidden');
+      box.innerHTML = '<div class="split-box">' + f.selections.map(function (s, i) {
+        let label = S.catName(s.catId);
+        if (s.subId) label += ' · ' + S.subName(s.catId, s.subId);
+        if (s.detailId) label += ' · ' + S.detailName(s.catId, s.subId, s.detailId);
+        return '<div class="split-row"><span class="split-name">' + U.escapeHtml(label) + '</span><input class="split-amount" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0.00" value="' + (s.amount > 0 ? s.amount : '') + '" data-index="' + i + '"></div>';
+      }).join('') + '</div>';
+      U.qsa('#txSplitBox .split-amount').forEach(function (inp) {
+        inp.addEventListener('input', function () {
+          const idx = +inp.getAttribute('data-index');
+          if (f.selections[idx]) f.selections[idx].amount = parseFloat(inp.value) || 0;
+        });
+      });
+    },
+
+    renderCatEditor: function () {
+      const V = window.Views;
+      const f = V._txForm;
+      const box = U.qs('#txCatEditor');
+      if (!box) return;
+      const edit = f.catEdit;
+      if (!edit) { box.innerHTML = ''; return; }
+      const cat = edit.catId ? S.categoryById(edit.catId) : null;
+      box.innerHTML = '<div class="bg-option"><div class="small bold">' + (edit.mode === 'edit' ? '编辑大类' : '新增大类') + '</div>' +
+        '<div class="form-grid" style="margin-top:6px">' +
+        '<input id="catEditName" type="text" placeholder="大类名称" value="' + (cat ? U.escapeHtml(cat.name) : '') + '">' +
+        '<input id="catEditIcon" type="text" maxlength="4" placeholder="图标" value="' + (cat ? U.escapeHtml(cat.icon || '') : '') + '">' +
+        '<input id="catEditColor" type="color" value="' + (cat ? cat.color : '#f59e0b') + '" style="height:38px">' +
+        '</div>' +
+        '<div class="toolbar" style="margin-top:6px">' +
+        '<button class="primary-btn compact" type="button" data-action="tx-cat-save">保存</button>' +
+        '<button class="ghost-btn compact" type="button" data-action="tx-cat-cancel">取消</button>' +
+        (edit.mode === 'edit' ? '<button class="icon-btn" type="button" data-action="tx-cat-delete" title="删除大类">' + U.icon('trash', 16) + '</button>' : '') +
+        '</div></div>';
+    },
+
+    renderDetailChildEditor: function () {
+      const V = window.Views;
+      const f = V._txForm;
+      const box = U.qs('#txDetailChildEditor');
+      if (!box) return;
+      const edit = f.detailChildEdit;
+      if (!edit) { box.innerHTML = ''; return; }
+      const sub = S.subById(f.catId, f.subId);
+      const detail = sub ? S.detailById(f.catId, f.subId, f.detailId) : null;
+      if (!detail) { box.innerHTML = ''; return; }
+      const current = edit.childId ? (detail.children || []).find(function (x) { return x.id === edit.childId; }) : null;
+      box.innerHTML = '<div class="bg-option"><div class="small bold">' + (edit.mode === 'edit' ? '编辑小类' : '新增小类') + '</div>' +
+        '<div class="form-grid" style="margin-top:6px">' +
+        '<input id="detailChildEditName" type="text" placeholder="小类名称" value="' + (current ? U.escapeHtml(current.name) : '') + '">' +
+        '<input id="detailChildEditColor" type="color" value="' + (current ? current.color : '#a78bfa') + '" style="height:38px">' +
+        '</div>' +
+        '<div class="toolbar" style="margin-top:6px">' +
+        '<button class="primary-btn compact" type="button" data-action="tx-detailchild-save">保存</button>' +
+        '<button class="ghost-btn compact" type="button" data-action="tx-detailchild-cancel">取消</button>' +
+        (edit.mode === 'edit' ? '<button class="icon-btn" type="button" data-action="tx-detailchild-delete" title="删除小类">' + U.icon('trash', 16) + '</button>' : '') +
+        '</div></div>';
     },
 
     renderSubEditor: function () {
@@ -201,6 +367,17 @@
       } else {
         area.innerHTML = '<label class="photo-upload" for="txPhotoInput">' + U.icon('camera', 18) + ' 拍照或从相册选择</label>';
       }
+    },
+
+    applyDefaultCard: function () {
+      const f = window.Views._txForm;
+      const sel = U.qs('#txCard');
+      if (!sel || !f || f.editing) return;
+      const cat = S.categoryById(f.catId);
+      const def = cat && Object.prototype.hasOwnProperty.call(cat, 'defaultCardId')
+        ? (cat.defaultCardId || '')
+        : (S.settings.defaultCardId === null ? '' : (S.settings.defaultCardId || (S.cards.length ? S.cards[0].id : '')));
+      sel.value = def;
     },
 
     // ---------- 卡片 ----------
