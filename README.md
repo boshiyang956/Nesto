@@ -5,7 +5,7 @@
 ## 方式一：Netlify Drop（最简单，1 分钟）
 
 1. 电脑浏览器打开 https://app.netlify.com/drop
-2. 把本文件夹直接拖进页面（或拖 `warm-ledger.zip` 压缩包）
+2. 把本文件夹直接拖进页面
 3. 页面会立即生成一个公网链接，例如 `https://xxxx.netlify.app`
 4. 手机打开这个链接即可使用，电脑可以关机
 
@@ -19,11 +19,12 @@
 ## 方式三：自己电脑当临时服务器（调试用）
 
 ```powershell
-cd "D:\AI Codeing\account book project\formal attempt"
+cd "你的项目目录"
 node server.js
 ```
 
 电脑访问 `http://127.0.0.1:8765/`，同一 Wi-Fi 的手机访问 `http://电脑IP:8765/`（需要防火墙放行 8765 端口）。此方式电脑必须开机，仅适合调试。
+`server.js` 只用于本机调试，不随线上仓库发布。
 
 ## 数据与隐私
 

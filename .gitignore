@@ -1,0 +1,13 @@
+# Local ledger data and exported backups
+data/
+
+# Release bundles
+*.zip
+
+# Local-only dev/test files
+server.js
+tools/
+
+# Node
+node_modules/
+.env
