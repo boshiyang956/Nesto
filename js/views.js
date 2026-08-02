@@ -204,8 +204,18 @@
     if (!container) return;
     let drag = null;
     let timer = null;
+    let rafId = null;
 
     function items() { return Array.prototype.slice.call(container.querySelectorAll(itemSel)); }
+
+    function clearItemAnimations() {
+      items().forEach(function (el) {
+        if (el.getAnimations) {
+          try { el.getAnimations().forEach(function (a) { a.cancel(); }); } catch (err) {}
+        }
+      });
+    }
+
     function clearDragStyles(el, pointerId, captured) {
       if (!el) return;
       el.classList.remove('is-dragging');
@@ -216,89 +226,262 @@
         try { el.releasePointerCapture(pointerId); } catch (err) {}
       }
     }
-    function cancel() {
+
+    function restoreOriginalOrder() {
+      if (!drag || !drag.originalList || !drag.el.parentElement) return;
+      const parent = drag.el.parentElement;
+      drag.originalList.forEach(function (el) {
+        if (el.parentElement === parent) parent.appendChild(el);
+      });
+    }
+
+    function cancel(restore) {
       clearTimeout(timer);
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      document.removeEventListener('pointerup', onDocPointerUp);
+      document.removeEventListener('pointercancel', onDocPointerCancel);
+      clearItemAnimations();
       container.classList.remove('is-reordering');
       if (drag) {
+        if (restore !== false && drag.active) restoreOriginalOrder();
         clearDragStyles(drag.el, drag.pointerId, drag.captured);
       }
       drag = null;
     }
+
+    function animateFlip(prev) {
+      items().forEach(function (el) {
+        if (el === drag.el) return;
+        const before = prev[el];
+        if (!before) return;
+        const after = el.getBoundingClientRect();
+        const dx = before.left - after.left;
+        const dy = before.top - after.top;
+        if (!dx && !dy) return;
+        if (el.animate) {
+          try {
+            el.animate(
+              [{ transform: 'translate(' + dx + 'px,' + dy + 'px)' }, { transform: 'translate(0,0)' }],
+              { duration: 220, easing: 'cubic-bezier(.22,.9,.28,1)' }
+            );
+          } catch (err) {}
+        } else {
+          el.style.transition = 'none';
+          el.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+          void el.offsetHeight;
+          el.style.transition = '';
+          el.style.transform = '';
+        }
+      });
+    }
+
     function moveToIndex(index) {
       if (!drag || !drag.el.parentElement) return;
-      const list = items();
-      if (index < 0 || index >= list.length || list[index] === drag.el) return;
-      const fromId = drag.el.getAttribute('data-id');
-      const toId = list[index].getAttribute('data-id');
-      const current = list.indexOf(drag.el);
-      const ref = index > current ? list[index].nextSibling : list[index];
+      const all = items();
+      const others = all.filter(function (el) { return el !== drag.el; });
+      const current = all.indexOf(drag.el);
+      const target = Math.max(0, Math.min(index, others.length));
+      if (target === current) return;
+      clearItemAnimations();
+      const prev = {};
+      items().forEach(function (el) { prev[el] = el.getBoundingClientRect(); });
+      const ref = target < others.length ? others[target] : null;
       drag.el.parentElement.insertBefore(drag.el, ref);
+      drag.currentIndex = target;
+      drag.changed = true;
+      animateFlip(prev);
+    }
+
+    function desiredInsertIndex(px, py) {
+      const all = items();
+      const rows = [];
+      all.forEach(function (el) {
+        if (el === drag.el) return;
+        const top = el.offsetTop - container.offsetTop;
+        const left = el.offsetLeft - container.offsetLeft;
+        const height = el.offsetHeight;
+        const width = el.offsetWidth;
+        let row = null;
+        for (let i = 0; i < rows.length; i++) {
+          if (Math.abs(rows[i].top - top) <= 6) { row = rows[i]; break; }
+        }
+        if (!row) {
+          row = { top: top, height: height, items: [] };
+          rows.push(row);
+        } else {
+          row.height = Math.max(row.height, height);
+        }
+        row.items.push({ left: left, width: width });
+      });
+      rows.sort(function (a, b) { return a.top - b.top; });
+      rows.forEach(function (row) {
+        row.items.sort(function (a, b) { return a.left - b.left; });
+      });
+      let count = 0;
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const centerY = row.top + row.height / 2;
+        if (py >= centerY + 4) {
+          count += row.items.length;
+          continue;
+        }
+        if (py < row.top - 4) break;
+        for (let j = 0; j < row.items.length; j++) {
+          const cx = row.items[j].left + row.items[j].width / 2;
+          if (px >= cx + 4) count++;
+          else break;
+        }
+        break;
+      }
+      return count;
+    }
+
+    function applyScroll(delta) {
+      let node = container;
+      while (node && node.nodeType === 1) {
+        const st = window.getComputedStyle(node);
+        const oy = st.overflowY;
+        if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && node.scrollHeight > node.clientHeight) {
+          const before = node.scrollTop;
+          node.scrollTop += delta;
+          return node.scrollTop - before;
+        }
+        node = node.parentNode;
+      }
+      const before = window.scrollY;
+      window.scrollBy(0, delta);
+      return window.scrollY - before;
+    }
+
+    function autoScroll(e) {
+      const edge = 52;
+      const cr = container.getBoundingClientRect();
+      const top = Math.max(cr.top, 0);
+      const bottom = Math.min(cr.bottom, window.innerHeight || document.documentElement.clientHeight);
+      let delta = 0;
+      if (e.clientY < top + edge) delta = -Math.ceil((top + edge - e.clientY) * 0.5);
+      else if (e.clientY > bottom - edge) delta = Math.ceil((e.clientY - (bottom - edge)) * 0.5);
+      if (delta) {
+        const applied = applyScroll(delta);
+        if (applied) drag.y -= applied;
+      }
+    }
+
+    function processPointerMove(e) {
+      if (!drag || drag.settling) return;
+      const dy = e.clientY - drag.y;
+      if (Math.abs(dy) > 4) drag.moved = true;
+      drag.el.style.transform = 'translate3d(0,' + dy + 'px,0) scale(1.03) rotate(.5deg)';
+      const cr = container.getBoundingClientRect();
+      const px = e.clientX - cr.left + container.scrollLeft;
+      const py = e.clientY - cr.top + container.scrollTop;
+      const target = desiredInsertIndex(px, py);
+      if (target !== drag.currentIndex) moveToIndex(target);
+      autoScroll(e);
+    }
+
+    function commitOrder() {
+      if (!drag || !drag.changed || !drag.originalList.length) return;
+      const all = items();
+      const finalIndex = all.indexOf(drag.el);
+      if (finalIndex === drag.fromIndex) {
+        drag.changed = false;
+        return;
+      }
+      const fromId = drag.fromId;
+      const toId = drag.originalList[finalIndex].getAttribute('data-id');
       if (fromId && toId && onReorder) onReorder(fromId, toId);
+    }
+
+    function finish() {
+      if (!drag) return;
+      const changed = drag.changed;
+      if (changed) window.Views.toast('顺序已更新', '', 'success');
+      cancel(false);
+    }
+
+    function onDocPointerUp() {
+      if (!drag) return;
+      if (!drag.active) { cancel(false); return; }
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      if (drag.lastMove) processPointerMove(drag.lastMove);
+      const el = drag.el;
+      drag.settling = true;
+      el.setAttribute('data-skip-click', '1');
+      setTimeout(function () { el.removeAttribute('data-skip-click'); }, 500);
+      if (!drag.changed && !drag.moved) { cancel(false); return; }
+      if (drag.changed) commitOrder();
+      const from = window.getComputedStyle(el).transform;
+      el.style.transition = 'none';
+      let anim = null;
+      if (el.animate) {
+        try {
+          anim = el.animate(
+            [{ transform: from }, { transform: 'translate(0,0) scale(1)' }],
+            { duration: 220, easing: 'cubic-bezier(.22,.9,.28,1)' }
+          );
+        } catch (err) {}
+      }
+      timer = setTimeout(finish, 260);
+      if (anim && anim.finished) {
+        anim.finished.then(function () { finish(); }).catch(function () { finish(); });
+      }
+    }
+
+    function onDocPointerCancel() {
+      if (!drag) return;
+      if (drag.settling) return;
+      cancel(true);
     }
 
     container.addEventListener('pointerdown', function (e) {
       const el = e.target.closest(itemSel);
       if (!el) return;
-      if (e.target.closest('button, a, input, select, textarea, [data-action]')) return;
-      drag = { el: el, pointerId: e.pointerId, y: e.clientY, active: false, moved: false, settling: false, captured: false };
+      if (e.target.closest('button, a, input, select, textarea')) return;
+      drag = { el: el, pointerId: e.pointerId, y: e.clientY, active: false, moved: false, changed: false, settling: false, captured: false, fromIndex: -1, fromId: null, originalList: [], currentIndex: -1, lastMove: null };
+      document.addEventListener('pointerup', onDocPointerUp);
+      document.addEventListener('pointercancel', onDocPointerCancel);
       timer = setTimeout(function () {
         if (!drag || drag.settling) return;
+        const all = items();
         drag.active = true;
         drag.moved = false;
+        drag.changed = false;
+        drag.fromIndex = all.indexOf(el);
+        drag.fromId = el.getAttribute('data-id');
+        drag.originalList = all.slice();
+        drag.currentIndex = drag.fromIndex;
         container.classList.add('is-reordering');
-        drag.el.classList.add('is-dragging');
-        drag.el.style.touchAction = 'none';
-        drag.el.style.transition = 'none';
-        if (drag.el.setPointerCapture) {
+        el.classList.add('is-dragging');
+        el.style.touchAction = 'none';
+        el.style.transition = 'none';
+        el.style.transform = 'translate3d(0,0,0) scale(1.03) rotate(.5deg)';
+        if (el.setPointerCapture) {
           try {
-            drag.el.setPointerCapture(drag.pointerId);
+            el.setPointerCapture(drag.pointerId);
             drag.captured = true;
           } catch (err) {}
         }
         window.Views.toast('已进入排序', '上下移动调整顺序', 'accent');
       }, 420);
     });
+
     container.addEventListener('pointermove', function (e) {
       if (!drag || drag.settling) return;
-      if (drag.active) {
-        e.preventDefault();
-        const dy = e.clientY - drag.y;
-        if (Math.abs(dy) > 4) drag.moved = true;
-        drag.el.style.transform = 'translateY(' + dy + 'px) scale(1.03) rotate(.5deg)';
-        const list = items();
-        let targetIndex = -1;
-        for (let i = 0; i < list.length; i++) {
-          if (list[i] === drag.el) continue;
-          if (e.clientY >= list[i].getBoundingClientRect().top + list[i].getBoundingClientRect().height / 2) targetIndex = i;
-          else break;
-        }
-        if (targetIndex < 0) targetIndex = 0;
-        if (targetIndex !== list.indexOf(drag.el)) moveToIndex(targetIndex);
-      } else if (Math.abs(e.clientY - drag.y) > 12) {
-        cancel();
+      if (!drag.active) {
+        if (Math.abs(e.clientY - drag.y) > 12) cancel(true);
+        return;
+      }
+      e.preventDefault();
+      drag.lastMove = e;
+      if (!rafId) {
+        rafId = requestAnimationFrame(function () {
+          rafId = null;
+          if (drag && drag.lastMove && drag.active) processPointerMove(drag.lastMove);
+        });
       }
     });
-    container.addEventListener('pointerup', function () {
-      if (!drag) return;
-      if (drag.active) {
-        const el = drag.el;
-        const wasMoved = drag.moved;
-        drag.settling = true;
-        el.style.transition = 'transform .2s cubic-bezier(.22,.9,.28,1), box-shadow .2s ease';
-        el.style.transform = 'translateY(0) scale(1)';
-        setTimeout(function () {
-          if (drag && drag.el === el) {
-            el.setAttribute('data-skip-click', '1');
-            setTimeout(function () { el.removeAttribute('data-skip-click'); }, 500);
-            if (wasMoved) window.Views.toast('顺序已更新', '', 'success');
-            cancel();
-          }
-        }, 220);
-      } else {
-        cancel();
-      }
-    });
-    container.addEventListener('pointercancel', cancel);
+
   }
 
   function txRowHtml(tx, opts) {

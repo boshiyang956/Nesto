@@ -1,5 +1,9 @@
 # Local ledger data and exported backups
 data/
+*.sqlite
+*.sqlite3
+*.db
+*.bak
 
 # Release bundles
 *.zip
@@ -14,3 +18,17 @@ tools/
 # Node
 node_modules/
 .env
+
+# Credentials, logs and editor/agent local state
+.env.*
+*.log
+*.key
+*.pem
+*.pfx
+*.p12
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.codex/
+.agents/
