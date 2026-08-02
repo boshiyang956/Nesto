@@ -46,6 +46,7 @@
     currentView: 'calendar',
     periodType: 'month',
     periodAnchor: U.todayStr(),
+    overviewRange: null,
     chartType: 'expense',
     drill: null,
     billsFilter: { type: 'all', payment: '', categoryId: '', cardId: '', from: '', to: '', q: '' },
@@ -54,6 +55,7 @@
     calSelected: U.todayStr(),
     calDetail: null,
     calTimeSel: null,
+    calWeekExpand: null,
     cardsSelected: null,
     goalsAnchor: U.todayStr(),
     categoriesTab: 'expense',
@@ -121,16 +123,18 @@
         el.classList.add('is-hiding');
         if (up) el.classList.add('is-up');
         clearTimeout(timer);
-        setTimeout(function () { el.remove(); }, 220);
+        setTimeout(function () { el.remove(); }, 420);
       }
 
       el.querySelector('.toast-close').addEventListener('click', function () { dismiss(false); });
-      el.addEventListener('touchstart', function (e) {
-        startY = e.touches[0].clientY;
+      el.addEventListener('pointerdown', function (e) {
+        if (e.target.closest('.toast-close')) return;
+        startY = e.clientY;
         swiped = false;
       }, { passive: true });
-      el.addEventListener('touchmove', function (e) {
-        const dy = e.touches[0].clientY - startY;
+      el.addEventListener('pointermove', function (e) {
+        if (startY === 0) return;
+        const dy = e.clientY - startY;
         if (dy < -18) {
           swiped = true;
           el.classList.add('is-swipe');
@@ -138,14 +142,20 @@
           el.style.opacity = String(Math.max(0, 1 + dy / 80));
         }
       }, { passive: true });
-      el.addEventListener('touchend', function () {
+      el.addEventListener('pointerup', function () {
         if (swiped) dismiss(true);
         else {
+          startY = 0;
           el.style.transform = '';
           el.style.opacity = '';
         }
       }, { passive: true });
-      timer = setTimeout(function () { dismiss(false); }, 1000);
+      el.addEventListener('pointercancel', function () {
+        startY = 0;
+        el.style.transform = '';
+        el.style.opacity = '';
+      }, { passive: true });
+      timer = setTimeout(function () { dismiss(false); }, 3000);
     }
   };
 
@@ -189,6 +199,108 @@
     return '<div class="toolbar"><button class="icon-btn" type="button" data-action="' + action + '-prev" title="上一周期">' + U.icon('chevL', 18) + '</button><button class="ghost-btn compact" type="button" data-action="' + action + '-today" style="padding:7px 12px">今天</button><button class="icon-btn" type="button" data-action="' + action + '-next" title="下一周期">' + U.icon('chevR', 18) + '</button><span class="muted bold" style="min-width:110px">' + U.escapeHtml(label) + '</span></div>';
   }
 
+  function attachLongPressReorder(containerSel, itemSel, onReorder) {
+    const container = U.qs(containerSel);
+    if (!container) return;
+    let drag = null;
+    let timer = null;
+
+    function items() { return Array.prototype.slice.call(container.querySelectorAll(itemSel)); }
+    function clearDragStyles(el, pointerId, captured) {
+      if (!el) return;
+      el.classList.remove('is-dragging');
+      el.style.touchAction = '';
+      el.style.transform = '';
+      el.style.transition = '';
+      if (captured && el.releasePointerCapture) {
+        try { el.releasePointerCapture(pointerId); } catch (err) {}
+      }
+    }
+    function cancel() {
+      clearTimeout(timer);
+      container.classList.remove('is-reordering');
+      if (drag) {
+        clearDragStyles(drag.el, drag.pointerId, drag.captured);
+      }
+      drag = null;
+    }
+    function moveToIndex(index) {
+      if (!drag || !drag.el.parentElement) return;
+      const list = items();
+      if (index < 0 || index >= list.length || list[index] === drag.el) return;
+      const fromId = drag.el.getAttribute('data-id');
+      const toId = list[index].getAttribute('data-id');
+      const current = list.indexOf(drag.el);
+      const ref = index > current ? list[index].nextSibling : list[index];
+      drag.el.parentElement.insertBefore(drag.el, ref);
+      if (fromId && toId && onReorder) onReorder(fromId, toId);
+    }
+
+    container.addEventListener('pointerdown', function (e) {
+      const el = e.target.closest(itemSel);
+      if (!el) return;
+      if (e.target.closest('button, a, input, select, textarea, [data-action]')) return;
+      drag = { el: el, pointerId: e.pointerId, y: e.clientY, active: false, moved: false, settling: false, captured: false };
+      timer = setTimeout(function () {
+        if (!drag || drag.settling) return;
+        drag.active = true;
+        drag.moved = false;
+        container.classList.add('is-reordering');
+        drag.el.classList.add('is-dragging');
+        drag.el.style.touchAction = 'none';
+        drag.el.style.transition = 'none';
+        if (drag.el.setPointerCapture) {
+          try {
+            drag.el.setPointerCapture(drag.pointerId);
+            drag.captured = true;
+          } catch (err) {}
+        }
+        window.Views.toast('已进入排序', '上下移动调整顺序', 'accent');
+      }, 420);
+    });
+    container.addEventListener('pointermove', function (e) {
+      if (!drag || drag.settling) return;
+      if (drag.active) {
+        e.preventDefault();
+        const dy = e.clientY - drag.y;
+        if (Math.abs(dy) > 4) drag.moved = true;
+        drag.el.style.transform = 'translateY(' + dy + 'px) scale(1.03) rotate(.5deg)';
+        const list = items();
+        let targetIndex = -1;
+        for (let i = 0; i < list.length; i++) {
+          if (list[i] === drag.el) continue;
+          if (e.clientY >= list[i].getBoundingClientRect().top + list[i].getBoundingClientRect().height / 2) targetIndex = i;
+          else break;
+        }
+        if (targetIndex < 0) targetIndex = 0;
+        if (targetIndex !== list.indexOf(drag.el)) moveToIndex(targetIndex);
+      } else if (Math.abs(e.clientY - drag.y) > 12) {
+        cancel();
+      }
+    });
+    container.addEventListener('pointerup', function () {
+      if (!drag) return;
+      if (drag.active) {
+        const el = drag.el;
+        const wasMoved = drag.moved;
+        drag.settling = true;
+        el.style.transition = 'transform .2s cubic-bezier(.22,.9,.28,1), box-shadow .2s ease';
+        el.style.transform = 'translateY(0) scale(1)';
+        setTimeout(function () {
+          if (drag && drag.el === el) {
+            el.setAttribute('data-skip-click', '1');
+            setTimeout(function () { el.removeAttribute('data-skip-click'); }, 500);
+            if (wasMoved) window.Views.toast('顺序已更新', '', 'success');
+            cancel();
+          }
+        }, 220);
+      } else {
+        cancel();
+      }
+    });
+    container.addEventListener('pointercancel', cancel);
+  }
+
   function txRowHtml(tx, opts) {
     const cat = S.categoryById(tx.categoryId);
     const sub = S.subName(tx.categoryId, tx.subcategoryId);
@@ -199,14 +311,16 @@
     const isIncome = tx.kind === 'income';
     const sign = isExpense ? '-' : isIncome ? '+' : '';
     const cls = isExpense ? 'expense' : isIncome ? 'income' : 'muted';
-    const note = tx.note || [child, detail, sub, S.catName(tx.categoryId)].filter(Boolean).join(' · ');
+    const note = tx.note || S.txCatLabels(tx);
     let meta = tx.time + (card ? ' · ' + card.name : '') + ' · ' + tx.paymentType;
     if (tx.mood) meta += ' ' + tx.mood;
-    const attrs = opts && opts.detail ? ' data-action="cal-detail" data-kind="tx" data-id="' + tx.id + '"' : '';
+    const dateLabelHtml = opts && opts.dateLabel ? '<span class="tx-date-label">' + U.escapeHtml(U.formatCN(tx.date)) + '</span> ' : '';
+    const attrs = opts && opts.detail ? ' data-action="cal-tx" data-tx-id="' + tx.id + '"' : '';
     return '<div class="tx-row"' + attrs + '><div class="tx-emoji">' + (cat ? U.escapeHtml(cat.icon) : '📦') + '</div>' +
       (tx.photo ? '<img class="tx-thumb" src="' + tx.photo + '" alt="账单照片">' : '') +
-      '<div class="tx-info"><strong>' + U.escapeHtml(note) + '</strong><span>' + U.escapeHtml(meta) + '</span></div>' +
+      '<div class="tx-info"><strong>' + U.escapeHtml(note) + '</strong><span>' + dateLabelHtml + U.escapeHtml(meta) + '</span></div>' +
       '<div class="tx-amount ' + cls + '">' + sign + U.moneyPlain(tx.amount) + '</div>' +
+      (opts && opts.detail ? '<span class="tx-expand-ico">' + U.icon('chevD', 14) + '</span>' : '') +
       '<div class="tx-actions"><button class="icon-btn" type="button" data-action="edit-tx" data-id="' + tx.id + '" title="编辑">' + U.icon('edit', 16) + '</button>' +
       '<button class="icon-btn" type="button" data-action="delete-tx" data-id="' + tx.id + '" title="删除">' + U.icon('trash', 16) + '</button></div></div>';
   }
@@ -257,10 +371,12 @@
   Views.renderOverview = function () {
     const type = this.periodType;
     const anchor = this.periodAnchor;
-    const range = periodRange(type, anchor);
+    const custom = this.overviewRange && this.overviewRange.from && this.overviewRange.to ? this.overviewRange : null;
+    const range = custom ? { from: custom.from, to: custom.to } : periodRange(type, anchor);
+    const label = custom ? custom.from + ' ~ ' + custom.to : periodLabel(type, anchor);
     const txs = S.txsBetween(range.from, range.to);
     const totals = S.totals(txs);
-    const prev = S.totals(S.txsBetween(prevRange(type, anchor).from, prevRange(type, anchor).to));
+    const prev = custom ? S.totals([]) : S.totals(S.txsBetween(prevRange(type, anchor).from, prevRange(type, anchor).to));
     const delta = function (cur, old) {
       if (!old) return '';
       const diff = cur - old;
@@ -288,7 +404,7 @@
       const cat = S.categoryById(drill);
       const sub = S.subById(drill, drillSub);
       const detail = S.detailById(drill, drillSub, drillDetail);
-      const leafTxs = chartTxs.filter(function (t) { return t.categoryId === drill && t.subcategoryId === drillSub && t.detailId === drillDetail; })
+      const leafTxs = chartTxs.filter(function (t) { return S.txInCategory(t, drill, drillSub, drillDetail); })
         .sort(function (a, b) { return a.date === b.date ? (a.time || '') < (b.time || '') ? 1 : -1 : a.date < b.date ? 1 : -1; });
       const leafTotal = leafTxs.reduce(function (acc, t) { return acc + (Number(t.amount) || 0); }, 0);
       chartInner = '<div class="view-row grid-2" style="align-items:start">' +
@@ -310,7 +426,7 @@
           legendHtml(detailSegs, false) +
           '</div>';
       } else {
-        const leafTxs = chartTxs.filter(function (t) { return t.categoryId === drill && t.subcategoryId === drillSub; });
+        const leafTxs = chartTxs.filter(function (t) { return S.txInCategory(t, drill, drillSub); });
         const leafTotal = leafTxs.reduce(function (acc, t) { return acc + (Number(t.amount) || 0); }, 0);
         chartInner = '<div class="view-row grid-2" style="align-items:start">' +
           '<div class="stat-card accent"><span class="label">' + U.escapeHtml(sub ? sub.name : '小类') + ' 小计</span><span class="value">' + U.moneyPlain(leafTotal) + '</span><span class="delta">' + leafTxs.length + ' 笔账单</span></div>' +
@@ -350,24 +466,41 @@
     // 周期对比柱状图
     const barLabels = [], barIncome = [], barExpense = [], barAnchors = [];
     const count = type === 'month' ? 4 : 4;
-    for (let i = count - 1; i >= 0; i--) {
-      let a, label;
-      if (type === 'month') {
-        a = U.monthAdd(range.from, -i);
-        label = (U.parseDate(a).getMonth() + 1) + '月';
-      } else if (type === 'week') {
-        a = U.dateAdd(range.from, -i * 7);
-        label = (U.parseDate(a).getMonth() + 1) + '/' + U.parseDate(a).getDate();
-      } else {
-        a = U.dateAdd(anchor, -i);
-        label = (U.parseDate(a).getMonth() + 1) + '/' + U.parseDate(a).getDate();
+    if (custom) {
+      const fromD = U.parseDate(custom.from);
+      const toD = U.parseDate(custom.to);
+      const totalDays = Math.max(1, Math.round((toD - fromD) / 86400000) + 1);
+      const chunk = Math.max(1, Math.ceil(totalDays / 4));
+      for (let i = 0; i < 4; i++) {
+        const a = U.dateAdd(custom.from, i * chunk);
+        const b = U.dateAdd(a, chunk - 1);
+        const r = { from: a, to: b > custom.to ? custom.to : b };
+        const t = S.totals(S.txsBetween(r.from, r.to));
+        barLabels.push((U.parseDate(a).getMonth() + 1) + '/' + U.parseDate(a).getDate());
+        barIncome.push(t.income);
+        barExpense.push(t.expense);
+        barAnchors.push(a);
       }
-      const r = periodRange(type, a);
-      const t = S.totals(S.txsBetween(r.from, r.to));
-      barLabels.push(label);
-      barIncome.push(t.income);
-      barExpense.push(t.expense);
-      barAnchors.push(a);
+    } else {
+      for (let i = count - 1; i >= 0; i--) {
+        let a, bl;
+        if (type === 'month') {
+          a = U.monthAdd(range.from, -i);
+          bl = (U.parseDate(a).getMonth() + 1) + '月';
+        } else if (type === 'week') {
+          a = U.dateAdd(range.from, -i * 7);
+          bl = (U.parseDate(a).getMonth() + 1) + '/' + U.parseDate(a).getDate();
+        } else {
+          a = U.dateAdd(anchor, -i);
+          bl = (U.parseDate(a).getMonth() + 1) + '/' + U.parseDate(a).getDate();
+        }
+        const r = periodRange(type, a);
+        const t = S.totals(S.txsBetween(r.from, r.to));
+        barLabels.push(bl);
+        barIncome.push(t.income);
+        barExpense.push(t.expense);
+        barAnchors.push(a);
+      }
     }
     const barChartHtml = C.bars(barLabels, [
       { name: '支出', color: '#e5484d', values: barExpense },
@@ -377,7 +510,13 @@
 
     // 趋势
     const trendPoints = [];
-    if (type === 'month') {
+    if (custom) {
+      let d = custom.from;
+      while (d <= custom.to) {
+        trendPoints.push({ label: (U.parseDate(d).getMonth() + 1) + '/' + U.parseDate(d).getDate(), value: S.totals(S.txsBetween(d, d, { kind: 'expense' })).expense });
+        d = U.dateAdd(d, 1);
+      }
+    } else if (type === 'month') {
       const days = U.daysInMonth(U.parseDate(range.from).getFullYear(), U.parseDate(range.from).getMonth() + 1);
       const today = U.todayStr();
       for (let i = 1; i <= days; i++) {
@@ -408,7 +547,7 @@
     });
 
     // 建议
-    const advice = buildOverviewAdvice(type, anchor, totals, prev, byCat, monthGoal);
+    const advice = buildOverviewAdvice(custom ? 'custom' : type, custom ? range.from : anchor, totals, prev, byCat, monthGoal);
 
     const sortedTxs = txs.slice().sort(function (a, b) { return a.date === b.date ? (a.time || '') < (b.time || '') ? 1 : -1 : a.date < b.date ? 1 : -1; });
     const recentGroups = {};
@@ -426,15 +565,18 @@
 
     U.qs('#viewContent').innerHTML =
       '<div class="view-stack">' +
-      '<div class="section"><div class="toolbar"><div class="seg" id="periodSeg">' +
+      '<div class="section"><div class="toolbar" style="flex-wrap:wrap"><div class="seg" id="periodSeg">' +
       '<button type="button" data-action="overview-period" data-type="day"' + (type === 'day' ? ' class="is-active"' : '') + '>日</button>' +
       '<button type="button" data-action="overview-period" data-type="week"' + (type === 'week' ? ' class="is-active"' : '') + '>周</button>' +
       '<button type="button" data-action="overview-period" data-type="month"' + (type === 'month' ? ' class="is-active"' : '') + '>月</button></div>' +
-      '<div class="spacer"></div>' + navArrows('overview', periodLabel(type, anchor)) + '</div></div>' +
+      '<input type="date" data-action="overview-range" data-key="from" value="' + (custom ? custom.from : '') + '" title="开始日期">' +
+      '<input type="date" data-action="overview-range" data-key="to" value="' + (custom ? custom.to : '') + '" title="结束日期">' +
+      (custom ? '<button class="text-btn" type="button" data-action="overview-range-clear">清除</button>' : '') +
+      '<div class="spacer"></div>' + navArrows('overview', label) + '</div></div>' +
       '<div class="grid-4">' +
-      statCard('收入', U.moneyPlain(totals.income), 'success', delta(totals.income, prev.income), 'arrowDown') +
-      statCard('支出', U.moneyPlain(totals.expense), 'danger', delta(totals.expense, prev.expense), 'arrowUp') +
-      statCard('结余', U.moneyPlain(totals.balance), totals.balance >= 0 ? 'accent' : 'danger', '', 'wallet') +
+      statCard('收入', U.moneyPlain(totals.income), 'success stat-pop', delta(totals.income, prev.income), 'arrowDown') +
+      statCard('支出', U.moneyPlain(totals.expense), 'danger stat-pop', delta(totals.expense, prev.expense), 'arrowUp') +
+      statCard('结余', U.moneyPlain(totals.balance), (totals.balance >= 0 ? 'accent' : 'danger') + ' stat-pop', '', 'wallet') +
       goalCard +
       '</div>' +
       '<div class="view-row grid-2">' +
@@ -446,7 +588,7 @@
       '<div class="section"><div class="section-head"><h3>周期对比</h3><span class="sub">点击柱子可跳转到该周期</span></div><div class="chart-wrap">' + barChartHtml + '</div></div>' +
       '</div>' +
       '<div class="view-row grid-2">' +
-      '<div class="section"><div class="section-head"><h3>每日趋势</h3><span class="sub">' + U.escapeHtml(periodLabel(type, anchor)) + '</span></div><div class="chart-wrap">' + C.line(trendPoints, { color: this.chartType === 'expense' ? '#e5484d' : '#2f9e44', height: 190 }) + '</div></div>' +
+      '<div class="section"><div class="section-head"><h3>每日趋势</h3><span class="sub">' + U.escapeHtml(label) + '</span></div><div class="chart-wrap">' + C.line(trendPoints, { color: this.chartType === 'expense' ? '#e5484d' : '#2f9e44', height: 190 }) + '</div></div>' +
       '<div class="section"><div class="section-head"><h3>' + (this.chartType === 'expense' ? '分类明细' : '收入明细') + '</h3></div><div class="data-table-wrap"><table class="data-table"><thead><tr><th>分类</th><th>笔数</th><th class="num">金额</th><th class="num">占比</th><th></th></tr></thead><tbody>' + tableRows + '</tbody></table></div></div>' +
       '</div>' +
       '<div class="view-row grid-2">' +
@@ -532,7 +674,7 @@
     let txs = S.transactions.slice();
     if (f.type !== 'all') txs = txs.filter(function (t) { return t.kind === f.type; });
     if (f.payment) txs = txs.filter(function (t) { return t.paymentType === f.payment; });
-    if (f.categoryId) txs = txs.filter(function (t) { return t.categoryId === f.categoryId; });
+    if (f.categoryId) txs = txs.filter(function (t) { return S.txInCategory(t, f.categoryId); });
     if (f.cardId) txs = txs.filter(function (t) { return t.cardId === f.cardId; });
     if (f.from) txs = txs.filter(function (t) { return t.date >= f.from; });
     if (f.to) txs = txs.filter(function (t) { return t.date <= f.to; });
@@ -540,7 +682,7 @@
       const q = f.q.toLowerCase();
       txs = txs.filter(function (t) {
         const card = t.cardId ? (S.cardById(t.cardId) || {}).name || '' : '';
-        return ((t.note || '') + S.catName(t.categoryId) + S.subName(t.categoryId, t.subcategoryId) + card).toLowerCase().indexOf(q) !== -1;
+        return ((t.note || '') + S.txCatLabels(t) + card).toLowerCase().indexOf(q) !== -1;
       });
     }
     txs.sort(function (a, b) { return a.date === b.date ? (a.time || '') < (b.time || '') ? 1 : -1 : a.date < b.date ? 1 : -1; });
@@ -618,23 +760,29 @@
     } else if (mode === 'week') {
       const weekDates = [];
       for (let i = 0; i < 7; i++) weekDates.push(U.dateAdd(U.startOfWeek(anchor), i));
-      let weekHtml = '<div class="view-row grid-7" style="grid-template-columns:repeat(7,minmax(0,1fr));gap:8px">';
+      let weekHtml = '<div class="week-strip">';
       for (let i = 0; i < 7; i++) {
         const d = U.dateAdd(U.startOfWeek(anchor), i);
         const hol = U.holidayFor(d);
         const dayTxs = (byDate[d] || []).slice().sort(function (a, b) { return (a.time || '') < (b.time || '') ? 1 : -1; });
         const dayScheds = [];
   S.schedules.forEach(function (s) { if (U.scheduleOccursOn(s, d)) dayScheds.push(s); });
-        weekHtml += '<div class="section" data-action="cal-day" data-date="' + d + '" style="cursor:pointer;min-height:240px"><div class="section-head"><div><strong>' + (U.parseDate(d).getDate()) + '</strong> <span class="muted small">周' + ['一', '二', '三', '四', '五', '六', '日'][i] + '</span></div>' + (hol ? '<span class="pill danger cal-holiday-pill" data-date="' + d + '" style="margin-left:auto">' + U.escapeHtml(hol.name) + '</span>' : '') + '</div>' +
-          dayScheds.map(function (s) { return '<span class="pill accent" style="margin:2px">' + U.escapeHtml(s.title) + '</span>'; }).join('') +
-      dayTxs.slice(0, 4).map(function (t) { return txRowHtml(t, { detail: true }); }).join('') +
-          (dayTxs.length > 4 ? '<div class="muted small">还有 ' + (dayTxs.length - 4) + ' 笔</div>' : '') +
-          (!dayTxs.length && !dayScheds.length ? '<div class="muted small">这一天很安静</div>' : '') +
+        weekHtml += '<div class="week-day' + (d === sel ? ' is-selected' : '') + (d === U.todayStr() ? ' is-today' : '') + '" data-action="cal-day" data-date="' + d + '">' +
+          '<div class="week-day-top"><strong>' + U.parseDate(d).getDate() + '</strong><span>周' + ['一', '二', '三', '四', '五', '六', '日'][i] + '</span></div>' +
+          (hol ? '<span class="week-hol cal-holiday-pill" data-date="' + d + '">' + U.escapeHtml(hol.name) + '</span>' : '') +
+          (dayTxs.length ? '<span class="week-count">' + dayTxs.length + ' 笔</span>' : '') +
+          dayScheds.slice(0, 1).map(function (s) { return '<span class="week-sched">' + U.escapeHtml(s.title) + '</span>'; }).join('') +
           '</div>';
       }
       weekHtml += '</div>';
-      mainHtml = '<div class="section"><div class="section-head"><h3>时间格</h3><span class="sub">点击小时块选时间，再次点击直接记账</span></div>' + this.timeGridHtml(weekDates) + '</div>' +
-        weekHtml +
+      const expDate = this.calWeekExpand || sel;
+      const expTxs = (byDate[expDate] || []).slice().sort(function (a, b) { return (a.time || '') < (b.time || '') ? 1 : -1; });
+      const expHol = U.holidayFor(expDate);
+      const expHtml = '<div class="section cal-week-detail"><div class="section-head"><h3><span class="cal-day-badge">' + U.escapeHtml(U.formatCN(expDate, true)) + ' 账单</span></h3>' + (expHol ? '<span class="pill danger cal-holiday-pill" data-date="' + expDate + '">' + U.escapeHtml(expHol.name) + '</span>' : '') + '<span class="muted small">双击账单可展开详情</span></div>' +
+        (expTxs.map(function (t) { return txRowHtml(t, { detail: true, dateLabel: true }); }).join('') || '<div class="chart-empty">这一天没有账单</div>') + '</div>';
+      mainHtml = weekHtml +
+        '<div class="section"><div class="section-head"><h3>时间格</h3><span class="sub">单击选中时间，双击直接记账</span></div>' + this.timeGridHtml(weekDates) + '</div>' +
+        expHtml +
         '<div class="day-panel" style="margin-top:14px">' + this.dayPanelHtml(sel) + '</div>';
     } else if (mode === 'day') {
       const hol = U.holidayFor(sel);
@@ -705,6 +853,12 @@
         }
       });
     });
+    U.qsa('.tx-row[data-action="cal-tx"]').forEach(function (row) {
+      row.addEventListener('dblclick', function (e) {
+        if (e.target.closest('.tx-actions')) return;
+        Views.toggleTxInline(row);
+      });
+    });
     Views.attachTimeGrid();
   };
 
@@ -714,28 +868,34 @@
     const sel = this.calTimeSel;
     const dowNames = ['一', '二', '三', '四', '五', '六', '日'];
     function fmtMin(m) { return U.pad2(Math.floor(m / 60)) + ':' + U.pad2(m % 60); }
-    const cols = dates.map(function (date) {
-      const dayTxs = (byDate[date] || []).filter(function (t) { return t.kind === 'expense' || t.kind === 'income'; });
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    let html = '<div class="time-axis-head"></div>';
+    dates.forEach(function (date) {
       const hol = U.holidayFor(date);
       const dow = (U.parseDate(date).getDay() || 7) - 1;
-      let blocks = '';
-      for (let h = 0; h < 24; h++) {
-        const start = h * 60;
+      html += '<div class="time-col-head' + (date === U.todayStr() ? ' is-today' : '') + '" data-action="cal-day" data-date="' + date + '" style="cursor:pointer"><strong>' + U.parseDate(date).getDate() + '</strong><span>周' + dowNames[dow] + '</span>' +
+        (hol ? '<em class="time-hol cal-holiday-pill" data-date="' + date + '">' + U.escapeHtml(hol.name) + '</em>' : '') + '</div>';
+    });
+    for (let h = 0; h < 24; h++) {
+      const start = h * 60;
+      const isNow = dates.indexOf(U.todayStr()) >= 0 && nowMin >= start && nowMin < start + 60;
+      html += '<div class="time-axis' + (isNow ? ' is-now' : '') + '">' + U.pad2(h) + ':00</div>';
+      dates.forEach(function (date) {
+        const dayTxs = (byDate[date] || []).filter(function (t) { return t.kind === 'expense' || t.kind === 'income'; });
         const inBlock = dayTxs.filter(function (t) {
           const p = (t.time || '00:00').split(':');
           const mins = (+p[0] || 0) * 60 + (+p[1] || 0);
           return mins >= start && mins < start + 60;
         });
         const isSel = sel && sel.date === date && sel.startMin >= start && sel.startMin < start + 60;
-        blocks += '<div class="time-block' + (isSel ? ' is-selected' : '') + '" type="button" data-action="cal-time" data-date="' + date + '" data-start="' + start + '">' +
-          '<span class="time-label">' + U.pad2(h) + ':00</span>' +
-          (inBlock.length ? '<span class="time-dots">' + inBlock.slice(0, 4).map(function (t) { return '<i style="background:' + (t.kind === 'expense' ? '#e5484d' : '#2f9e44') + '"></i>'; }).join('') + '</span>' : '') +
+        html += '<div class="time-block' + (isSel ? ' is-selected' : '') + (isNow && date === U.todayStr() ? ' is-now' : '') + '" data-action="cal-time" data-date="' + date + '" data-start="' + start + '">' +
+          (inBlock.length ? '<span class="time-dots">' + inBlock.slice(0, 3).map(function (t) { return '<i style="background:' + (t.kind === 'expense' ? '#e5484d' : '#2f9e44') + '"></i>'; }).join('') + '</span>' : '') +
           (isSel ? '<span class="time-plus">+</span><span class="time-sel-label">' + fmtMin(sel.startMin) + '</span>' : '') +
           '</div>';
-      }
-      return '<div class="time-col"><div class="time-col-head"><strong>' + U.parseDate(date).getDate() + '</strong><span>周' + dowNames[dow] + '</span>' + (hol ? '<span class="pill danger cal-holiday-pill" data-date="' + date + '">' + U.escapeHtml(hol.name) + '</span>' : '') + '</div>' + blocks + '</div>';
-    }).join('');
-    return '<div class="time-grid' + (dates.length === 1 ? ' single' : '') + '">' + cols + '</div>';
+      });
+    }
+    return '<div class="time-grid' + (dates.length === 1 ? ' single' : '') + '">' + html + '</div>';
   };
 
   Views.attachTimeGrid = function () {
@@ -746,20 +906,56 @@
       let baseMin = self.calTimeSel ? self.calTimeSel.startMin : 0;
       let dragging = false;
       let moved = false;
-      function labelEl() { return block.querySelector('.time-sel-label'); }
+      let pointerId = 0;
+      let captured = false;
       function fmtMin(m) { return U.pad2(Math.floor(m / 60)) + ':' + U.pad2(m % 60); }
+      function findBlock(date, start) {
+        return block.parentElement.querySelector('.time-block[data-date="' + date + '"][data-start="' + start + '"]');
+      }
+      function syncSelection(date, startMin) {
+        U.qsa('.time-block.is-selected').forEach(function (b) {
+          b.classList.remove('is-selected');
+          const plus = b.querySelector('.time-plus');
+          const label = b.querySelector('.time-sel-label');
+          if (plus) plus.remove();
+          if (label) label.remove();
+        });
+        const start = Math.floor(startMin / 60) * 60;
+        const next = findBlock(date, start);
+        if (!next) return;
+        next.classList.add('is-selected');
+        if (!next.querySelector('.time-plus')) {
+          const plus = document.createElement('span');
+          plus.className = 'time-plus';
+          plus.textContent = '+';
+          next.appendChild(plus);
+        }
+        const cur = next.querySelector('.time-sel-label');
+        if (cur) cur.textContent = fmtMin(startMin);
+        else {
+          const label = document.createElement('span');
+          label.className = 'time-sel-label';
+          label.textContent = fmtMin(startMin);
+          next.appendChild(label);
+        }
+      }
       block.addEventListener('pointerdown', function (e) {
         moved = false;
         dragging = false;
+        captured = false;
+        pointerId = e.pointerId;
         startY = e.clientY;
         baseMin = self.calTimeSel ? self.calTimeSel.startMin : 0;
-        if (block.setPointerCapture) {
-          try { block.setPointerCapture(e.pointerId); } catch (err) {}
-        }
         timer = setTimeout(function () {
           dragging = true;
           block.classList.add('is-dragging');
           block.setAttribute('data-dragging', '1');
+          if (block.setPointerCapture) {
+            try {
+              block.setPointerCapture(pointerId);
+              captured = true;
+            } catch (err) {}
+          }
         }, 260);
       });
       block.addEventListener('pointermove', function (e) {
@@ -767,16 +963,21 @@
         const step = Math.round((e.clientY - startY) / 8) * 15;
         const newMin = Math.max(0, Math.min(23 * 60 + 45, baseMin + step));
         self.calTimeSel.startMin = newMin;
-        const el = labelEl();
-        if (el) el.textContent = fmtMin(newMin);
+        syncSelection(self.calTimeSel.date, newMin);
         moved = true;
       });
       function endDrag() {
         clearTimeout(timer);
-        block.classList.remove('is-dragging');
+        U.qsa('.time-block.is-dragging').forEach(function (b) { b.classList.remove('is-dragging'); });
+        if (captured && block.releasePointerCapture) {
+          try { block.releasePointerCapture(pointerId); } catch (err) {}
+        }
         if (moved) {
-          block.setAttribute('data-skip-click', '1');
-          setTimeout(function () { block.removeAttribute('data-skip-click'); }, 500);
+          U.qsa('.time-block.is-selected').forEach(function (b) {
+            b.setAttribute('data-skip-click', '1');
+            setTimeout(function () { b.removeAttribute('data-skip-click'); }, 500);
+          });
+          self.renderCalendar();
         }
         dragging = false;
       }
@@ -872,7 +1073,7 @@
       '<button class="icon-btn" type="button" data-action="delete-tx" data-id="' + tx.id + '" title="删除">' + U.icon('trash', 16) + '</button></div></div>' +
       '<div class="grid-3">' +
       statCard('金额', U.moneyPlain(tx.amount), cls, '', 'money') +
-      statCard('分类', U.escapeHtml([child, detail, sub, cat ? cat.name : ''].filter(Boolean).join(' / ')), '', '', 'tags') +
+      statCard('分类', U.escapeHtml(S.txCatLabels(tx)), '', '', 'tags') +
       statCard('日期', U.formatCN(tx.date, true) + ' ' + tx.time, '', card ? card.name + ' · ' + tx.paymentType : tx.paymentType, 'calendar') +
       '</div>' +
       (tx.note ? '<div class="advice-box accent" style="margin-top:10px">' + U.escapeHtml(tx.note) + '</div>' : '') +
@@ -882,6 +1083,35 @@
       (related || '<div class="muted small">暂无其他账单</div>') +
       '</div>';
     return html;
+  };
+
+  Views.toggleTxInline = function (row) {
+    const tx = S.transactions.find(function (t) { return t.id === row.getAttribute('data-tx-id'); });
+    if (!tx) return;
+    const next = row.nextElementSibling;
+    if (next && next.classList.contains('tx-inline-detail')) {
+      next.remove();
+      row.classList.remove('is-expanded');
+      return;
+    }
+    row.classList.add('is-expanded');
+    const card = tx.cardId ? S.cardById(tx.cardId) : null;
+    const labels = S.txCatLabels(tx);
+    const kindLabel = { expense: '支出', income: '收入', recharge: '充值', withdraw: '提现' }[tx.kind] || tx.kind;
+    const detail = document.createElement('div');
+    detail.className = 'tx-inline-detail';
+    detail.innerHTML =
+      '<div class="tx-detail-head"><span class="pill ' + (tx.kind === 'expense' ? 'danger' : tx.kind === 'income' ? 'success' : 'accent') + '">' + U.escapeHtml(kindLabel) + '</span>' +
+      '<span class="tx-detail-amount ' + (tx.kind === 'expense' ? 'expense' : 'income') + '">' + (tx.kind === 'expense' ? '-' : tx.kind === 'income' ? '+' : '') + U.moneyPlain(tx.amount) + '</span></div>' +
+      '<div class="tx-detail-row"><span>分类</span><strong>' + U.escapeHtml(labels) + '</strong></div>' +
+      '<div class="tx-detail-row"><span>时间</span><strong>' + U.escapeHtml(U.formatCN(tx.date, true) + ' ' + (tx.time || '')) + '</strong></div>' +
+      '<div class="tx-detail-row"><span>方式</span><strong>' + U.escapeHtml((card ? card.name + ' · ' : '') + (tx.paymentType || '未选择')) + '</strong></div>' +
+      (tx.note ? '<div class="tx-detail-note">' + U.escapeHtml(tx.note) + '</div>' : '') +
+      (tx.mood ? '<div class="tx-detail-row"><span>心情</span><strong>' + U.escapeHtml(tx.mood) + '</strong></div>' : '') +
+      (tx.photo ? '<img src="' + tx.photo + '" alt="账单照片" class="tx-detail-photo">' : '') +
+      '<div class="tx-detail-actions"><button class="icon-btn" type="button" data-action="edit-tx" data-id="' + tx.id + '" title="编辑">' + U.icon('edit', 15) + '</button>' +
+      '<button class="icon-btn" type="button" data-action="delete-tx" data-id="' + tx.id + '" title="删除">' + U.icon('trash', 15) + '</button></div>';
+    row.after(detail);
   };
 
   // ---------- 卡片 ----------
@@ -896,12 +1126,12 @@
     let cardHtml = '';
     cards.forEach(function (card) {
       const bal = S.cardBalance(card.id);
-      cardHtml += '<div class="bank-card' + (selId === card.id ? ' is-selected' : '') + '" style="background:linear-gradient(135deg,' + card.color + ', color-mix(in srgb, ' + card.color + ' 68%, #000))" data-action="card-select" data-card-id="' + card.id + '">' +
+      cardHtml += '<div class="bank-card' + (selId === card.id ? ' is-selected' : '') + '" style="background:linear-gradient(135deg,' + card.color + ', color-mix(in srgb, ' + card.color + ' 68%, #000))" data-action="card-select" data-card-id="' + card.id + '" data-id="' + card.id + '">' +
         '<div class="card-top"><span class="card-ico">' + U.icon('wallet', 18) + '</span><div><div class="card-name">' + U.escapeHtml(card.name) + '</div><div class="card-type">' + U.escapeHtml(card.type) + ' · ' + U.escapeHtml(card.note || '') + '</div></div></div>' +
         '<div class="card-balance"><div class="lbl">当前余额</div><div class="val">' + U.moneyPlain(bal) + '</div></div>' +
         '<div class="card-foot"><span>初始 ' + U.moneyPlain(card.initialBalance) + '</span><div class="card-actions">' +
-        '<button class="icon-btn" type="button" data-action="card-op" data-card-id="' + card.id + '" data-op="recharge" title="充值">' + U.icon('arrowDown', 15) + '</button>' +
-        '<button class="icon-btn" type="button" data-action="card-op" data-card-id="' + card.id + '" data-op="withdraw" title="提现">' + U.icon('arrowUp', 15) + '</button>' +
+        '<button class="icon-btn" type="button" data-action="card-op" data-card-id="' + card.id + '" data-op="recharge" title="充值">' + U.icon('arrowUp', 15) + '</button>' +
+        '<button class="icon-btn" type="button" data-action="card-op" data-card-id="' + card.id + '" data-op="withdraw" title="提现">' + U.icon('arrowDown', 15) + '</button>' +
         '<button class="icon-btn" type="button" data-action="open-transfer" data-card-id="' + card.id + '" title="转账">' + U.icon('transfer', 15) + '</button>' +
         '<button class="icon-btn" type="button" data-action="edit-card" data-card-id="' + card.id + '" title="编辑">' + U.icon('edit', 15) + '</button>' +
         '<button class="icon-btn" type="button" data-action="delete-card" data-card-id="' + card.id + '" title="删除">' + U.icon('trash', 15) + '</button>' +
@@ -955,16 +1185,20 @@
       '<div class="toolbar"><div class="seg">' + statCard('全部卡片余额', U.moneyPlain(totalBal), 'accent', '', '') + '</div><div class="spacer"></div>' +
       '<button class="ghost-btn compact" type="button" data-action="open-transfer">' + U.icon('transfer', 16) + ' 卡间转账</button>' +
       '<button class="primary-btn compact" type="button" data-action="add-card">' + U.icon('plus', 15) + ' 添加卡片</button></div>' +
+      '<p class="muted small" style="margin-top:-6px">长按卡片可拖动排序</p>' +
       '<div class="card-grid">' + cardHtml + '</div>' +
       (selId ? '<div class="section"><div class="section-head"><h3>' + U.escapeHtml((S.cardById(selId) || {}).name || '') + ' 流水</h3>' +
       '<div class="card-op-grid" style="margin-left:auto;max-width:420px">' +
-      '<button class="card-op-btn" type="button" data-action="card-op" data-card-id="' + selId + '" data-op="recharge">' + U.icon('arrowDown', 18) + '充值</button>' +
-      '<button class="card-op-btn" type="button" data-action="card-op" data-card-id="' + selId + '" data-op="withdraw">' + U.icon('arrowUp', 18) + '提现</button>' +
+      '<button class="card-op-btn" type="button" data-action="card-op" data-card-id="' + selId + '" data-op="recharge">' + U.icon('arrowUp', 18) + '充值</button>' +
+      '<button class="card-op-btn" type="button" data-action="card-op" data-card-id="' + selId + '" data-op="withdraw">' + U.icon('arrowDown', 18) + '提现</button>' +
       '<button class="card-op-btn" type="button" data-action="card-op" data-card-id="' + selId + '" data-op="expense">' + U.icon('receipt', 18) + '记支出</button>' +
       '<button class="card-op-btn" type="button" data-action="card-op" data-card-id="' + selId + '" data-op="income">' + U.icon('money', 18) + '记收入</button>' +
       '</div></div>' + ledgerHtml + '</div>' : '') +
       '<div class="section"><div class="section-head"><h3>卡间资金关系</h3><span class="sub">初始余额与转账流向</span></div><div class="view-row grid-2">' + relHtml + '</div></div>' +
       '</div>';
+    attachLongPressReorder('.card-grid', '.bank-card', function (fromId, toId) {
+      S.reorderCards(fromId, toId);
+    });
   };
 
   // ---------- 目标 ----------
@@ -990,6 +1224,7 @@
         '<div class="toolbar"><div class="bold price">' + U.moneyPlain(prog.spent) + ' <span class="muted small">/ ' + U.moneyPlain(prog.target) + '</span></div><div class="spacer"></div><span class="' + (cls === 'danger' ? 'expense' : '') + ' bold">' + pctLabel + '</span></div>' +
         '<div class="progress-track"><div class="progress-fill ' + cls + '" style="' + fillStyle + '"></div></div>' +
         '<div>' + thChips + '</div>' +
+        (g.message ? '<div class="advice-box accent goal-message">' + U.icon('heart', 14) + ' ' + U.escapeHtml(g.message) + '</div>' : '') +
         (prog.isOver ? '<div class="advice-box danger">已超支 ' + U.moneyPlain(prog.spent - prog.target) + '，接下来每一笔都要三思啦。</div>' : '') +
         '</div>';
     });
@@ -1018,10 +1253,11 @@
       '<button class="primary-btn compact" type="button" data-action="add-goal">' + U.icon('plus', 15) + ' 新建目标</button></div></div>' +
       '<div class="view-row grid-2">' + goalsHtml + '</div>' +
       '<div class="section"><div class="section-head"><h3>花销建议</h3><span class="sub">根据剩余天数自动分配</span></div>' + adviceHtml + '</div>' +
-      '<div class="section"><div class="section-head"><h3>阈值提醒文案预览</h3></div><div class="legend">' +
+      '<div class="section"><div class="section-head"><h3>阈值提醒文案预览</h3><span class="sub">到达对应进度时会推送这条文案</span></div><div class="legend">' +
       S.goals.flatMap(function (g) { return (g.thresholds || []).map(function (th) { return { g: g, th: th }; }); }).map(function (x) {
-        return '<div class="legend-row"><span class="legend-dot" style="background:var(--primary)"></span><span class="legend-name">' + U.escapeHtml(x.g.name + ' · ' + x.th.percent + '%') + '</span><span class="muted small">' + U.escapeHtml(x.th.message) + '</span></div>';
-      }).join('') || '<div class="muted small">暂无提醒文案</div>' + '</div></div>' +
+        return '<div class="legend-row"><span class="legend-dot" style="background:var(--primary)"></span><span class="legend-name">' + U.escapeHtml(x.g.name + ' · ' + x.th.percent + '%') + '</span><span class="muted small">' + U.escapeHtml(x.th.enabled === false ? '（未启用）' : (x.th.message || '使用默认提醒文案')) + '</span></div>';
+      }).join('') + (S.goals.flatMap(function (g) { return (g.thresholds || []).filter(function (th) { return th.enabled !== false; }); }).length ? '' : '<div class="muted small">暂无可预览的启用阈值</div>') +
+      '</div></div>' +
       '</div>';
   };
 
@@ -1031,21 +1267,29 @@
     const cats = S.categoriesByType(type);
     let grid = '';
     cats.forEach(function (cat) {
-      const count = S.transactions.filter(function (t) { return t.categoryId === cat.id; }).length;
+      const count = S.transactions.filter(function (t) { return S.txInCategory(t, cat.id); }).length;
       const subs = cat.subs.map(function (s) {
-        const children = (s.children || []).map(function (d) {
-          return '<span class="sub-chip detail"><span class="dot" style="background:' + d.color + '"></span>' + U.escapeHtml(d.name) +
+        const details = (s.children || []).map(function (d) {
+          const childChips = (d.children || []).map(function (x) {
+            return '<span class="sub-chip child"><span class="dot" style="background:' + x.color + '"></span>' + U.escapeHtml(x.name) +
+              '<button class="icon-btn" style="width:17px;height:17px" type="button" data-action="edit-detailchild" data-cat-id="' + cat.id + '" data-sub-id="' + s.id + '" data-detail-id="' + d.id + '" data-detail-child-id="' + x.id + '" title="编辑小类">' + U.icon('edit', 10) + '</button>' +
+              '<button class="icon-btn" style="width:17px;height:17px" type="button" data-action="delete-detailchild" data-cat-id="' + cat.id + '" data-sub-id="' + s.id + '" data-detail-id="' + d.id + '" data-detail-child-id="' + x.id + '" title="删除小类">' + U.icon('x', 10) + '</button></span>';
+          }).join('');
+          return '<div class="detail-item"><span class="sub-chip detail"><span class="dot" style="background:' + d.color + '"></span>' + U.escapeHtml(d.name) +
             '<button class="icon-btn" style="width:18px;height:18px" type="button" data-action="edit-detail" data-cat-id="' + cat.id + '" data-sub-id="' + s.id + '" data-detail-id="' + d.id + '" title="编辑细分类">' + U.icon('edit', 11) + '</button>' +
-            '<button class="icon-btn" style="width:18px;height:18px" type="button" data-action="delete-detail" data-cat-id="' + cat.id + '" data-sub-id="' + s.id + '" data-detail-id="' + d.id + '" title="删除细分类">' + U.icon('x', 11) + '</button></span>';
+            '<button class="icon-btn" style="width:18px;height:18px" type="button" data-action="delete-detail" data-cat-id="' + cat.id + '" data-sub-id="' + s.id + '" data-detail-id="' + d.id + '" title="删除细分类">' + U.icon('x', 11) + '</button></span>' +
+            '<div class="detailchild-row">' + childChips +
+            '<button class="detail-add" type="button" data-action="add-detailchild" data-cat-id="' + cat.id + '" data-sub-id="' + s.id + '" data-detail-id="' + d.id + '" title="添加小类">' + U.icon('plus', 10) + ' 小类</button>' +
+            '</div></div>';
         }).join('');
         return '<div class="sub-block"><span class="sub-chip"><span class="dot" style="background:' + s.color + '"></span>' + U.escapeHtml(s.name) +
           '<button class="icon-btn" style="width:20px;height:20px" type="button" data-action="edit-sub" data-cat-id="' + cat.id + '" data-sub-id="' + s.id + '" title="编辑小类">' + U.icon('edit', 12) + '</button>' +
           '<button class="icon-btn" style="width:20px;height:20px" type="button" data-action="delete-sub" data-cat-id="' + cat.id + '" data-sub-id="' + s.id + '" title="删除小类">' + U.icon('x', 12) + '</button></span>' +
-          '<div class="detail-chip-row">' + children +
+          '<div class="detail-chip-row">' + details +
           '<button class="detail-add" type="button" data-action="add-detail" data-cat-id="' + cat.id + '" data-sub-id="' + s.id + '" title="添加细分类">' + U.icon('plus', 11) + ' 细类</button>' +
           '</div></div>';
       }).join('');
-      grid += '<div class="cat-card"><div class="cat-card-head"><div class="cat-big-ico" style="background:' + cat.color + '">' + U.escapeHtml(cat.icon) + '</div>' +
+      grid += '<div class="cat-card" data-id="' + cat.id + '"><div class="cat-card-head"><div class="cat-big-ico" style="background:' + cat.color + '">' + U.escapeHtml(cat.icon) + '</div>' +
         '<div class="cat-name"><strong>' + U.escapeHtml(cat.name) + '</strong><span>' + (cat.system ? '默认分类' : '自定义分类') + ' · ' + count + ' 笔账单</span></div>' +
         '<div class="tx-actions"><button class="icon-btn" type="button" data-action="add-sub" data-cat-id="' + cat.id + '" title="添加小类">' + U.icon('plus', 16) + '</button>' +
         '<button class="icon-btn" type="button" data-action="edit-category" data-id="' + cat.id + '" title="编辑大类">' + U.icon('edit', 16) + '</button>' +
@@ -1059,9 +1303,12 @@
       '<button type="button" data-action="categories-tab" data-type="income"' + (type === 'income' ? ' class="is-active"' : '') + '>收入分类</button></div>' +
       '<div class="spacer"></div>' +
       '<button class="primary-btn compact" type="button" data-action="add-category" data-type="' + type + '">' + U.icon('plus', 15) + ' 新建大类</button></div>' +
-      '<p class="muted small">大类与小类都可以自由新增、改名、换色，和默认分类地位完全一样。</p></div>' +
+      '<p class="muted small">四个层级均可新增、改名、换色；所有层级名称全局唯一，不能重复。</p></div>' +
       '<div class="view-row grid-3">' + grid + '</div>' +
       '</div>';
+    attachLongPressReorder('.view-row.grid-3', '.cat-card', function (fromId, toId) {
+      S.reorderCategories(type, fromId, toId);
+    });
   };
 
   // ---------- 设置 ----------
@@ -1117,7 +1364,10 @@
       '<div class="setting-row"><div class="info"><strong>节日提醒</strong><span>父亲节、母亲节、生日等自动提醒记账</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="holidayReminders"' + (st.holidayReminders !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
       '<div class="setting-row"><div class="info"><strong>俏皮提醒</strong><span>阈值提醒使用更有趣的文案</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="playfulReminders"' + (st.playfulReminders !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
       '<div class="setting-row"><div class="info"><strong>提示消息</strong><span>记账成功、金额错误等轻提示，可上滑或用右上角 × 关闭；关闭后不再显示</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="showToasts"' + (st.showToasts !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
-      '<div class="setting-row"><div class="info"><strong>回车提交</strong><span>输入名称等单行内容时按回车直接保存</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="enterToSubmit"' + (st.enterToSubmit !== false ? ' checked' : '') + '><span class="track"></span></label></div></div>' +
+      '<div class="setting-row"><div class="info"><strong>回车提交</strong><span>编辑名称时按回车直接完成，长按回车换行</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="enterToSubmit"' + (st.enterToSubmit !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
+      '<div class="setting-row"><div class="info"><strong>长按回车换行</strong><span>长按回车插入换行，普通回车仍然提交</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="enterLongPressNewline"' + (st.enterLongPressNewline !== false ? ' checked' : '') + '><span class="track"></span></label></div></div>' +
+      '<div class="section"><div class="section-head"><h3>记账时间</h3><span class="sub">日历双击今天或日视图记账的默认时间</span></div>' +
+      '<div class="setting-row"><div class="info"><strong>早上记账时间</strong><span>双击当天日期或日视图右上角记账时使用</span></div><input type="time" data-action="morning-time" value="' + U.escapeHtml(st.defaultMorningTime || '08:00') + '" style="width:130px"></div></div>' +
       defaultCardHtml +
 
       '<div class="view-row grid-2">' +

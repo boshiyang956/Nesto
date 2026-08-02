@@ -1,4 +1,4 @@
-const CACHE = 'warm-ledger-v7';
+const CACHE = 'warm-ledger-v21';
 const CORE = [
   './',
   './index.html',
@@ -43,15 +43,15 @@ self.addEventListener('fetch', function (event) {
     return;
   }
   event.respondWith(
-    caches.match(event.request).then(function (cached) {
-      if (cached) return cached;
-      return fetch(event.request).then(function (res) {
-        if (res && res.status === 200) {
-          const copy = res.clone();
-          caches.open(CACHE).then(function (cache) { cache.put(event.request, copy); });
-        }
-        return res;
-      }).catch(function () {
+    fetch(event.request).then(function (res) {
+      if (res && res.status === 200) {
+        const copy = res.clone();
+        caches.open(CACHE).then(function (cache) { cache.put(event.request, copy); });
+      }
+      return res;
+    }).catch(function () {
+      return caches.match(event.request).then(function (cached) {
+        if (cached) return cached;
         if (event.request.mode === 'navigate') return caches.match('./index.html');
         return Response.error();
       });

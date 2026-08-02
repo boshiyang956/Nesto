@@ -118,6 +118,7 @@
     // 每次进入都从干净状态开始，避免上个账号的视图状态残留
     V.periodType = 'month';
     V.periodAnchor = U.todayStr();
+    V.overviewRange = null;
     V.chartType = 'expense';
     V.drill = null;
     V.drillSub = null;
@@ -140,6 +141,9 @@
     const name = S.currentUserName();
     U.qs('#sidebarUserName').textContent = name;
     U.qs('#sidebarAvatar').textContent = (name || '暖').charAt(0);
+    const ncode = S.currentUserNcode();
+    const ncodeEl = U.qs('#sidebarNcode');
+    if (ncodeEl) ncodeEl.textContent = ncode ? 'N码 ' + ncode : 'N码';
   }
 
   // ---------- 弹窗确认 ----------
@@ -154,6 +158,14 @@
     const amount = parseFloat(U.qs('#txAmount').value);
     if (!amount || amount <= 0) { V.toast('金额不对', '请输入大于 0 的金额', 'danger'); return; }
     const kind = f.type === 'income' ? 'income' : 'expense';
+    if (!f.editing && kind === 'expense') {
+      const cardId = U.qs('#txCard').value;
+      const card = cardId ? S.cardById(cardId) : null;
+      if (card && S.cardBalance(card.id) - amount < -0.001) {
+        V.toast('余额不足', card.name + ' 当前余额 ' + U.moneyPlain(S.cardBalance(card.id)) + '，卡片余额不能为负', 'danger');
+        return;
+      }
+    }
     let catId = f.catId;
     let subId = f.subId;
     if (f.multi) {
@@ -204,16 +216,19 @@
     const amount = parseFloat(U.qs('#txAmount').value);
     if (!amount || amount <= 0) { V.toast('金额不对', '请输入大于 0 的金额', 'danger'); return; }
     const kind = f.type === 'income' ? 'income' : 'expense';
-    const splits = f.selections.map(function (s) {
-      return { amount: s.amount > 0 ? U.round2(s.amount) : null, catId: s.catId, subId: s.subId || null, detailId: s.detailId || null };
+    if (!f.selections.length) { V.toast('缺分类', '请先选择至少一个分类', 'danger'); return; }
+    const entries = f.selections.map(function (s) {
+      return { categoryId: s.catId, subcategoryId: s.subId || null, detailId: s.detailId || null, detailChildId: s.detailChildId || null };
     });
-    if (splits.some(function (s) { return !s.amount; })) { V.toast('拆分金额不对', '请给每个分类填写大于 0 的金额', 'danger'); return; }
-    const sum = splits.reduce(function (a, s) { return a + s.amount; }, 0);
-    const diff = U.round2(amount - sum);
-    if (Math.abs(diff) > 0.01) { V.toast('金额不一致', '拆分金额合计应与总金额一致', 'danger'); return; }
-    splits[splits.length - 1].amount = U.round2(splits[splits.length - 1].amount + diff);
-    const base = {
+    const payload = {
+      id: f.editing || U.uid('tx'),
       kind: kind,
+      amount: U.round2(amount),
+      categoryId: entries[0].categoryId,
+      subcategoryId: entries[0].subcategoryId,
+      detailId: entries[0].detailId,
+      detailChildId: entries[0].detailChildId,
+      multi: entries,
       cardId: U.qs('#txCard').value || null,
       paymentType: U.qs('#txPayment').value,
       date: U.qs('#txDate').value || U.todayStr(),
@@ -221,19 +236,15 @@
       note: U.qs('#txNote').value.trim(),
       mood: f.mood,
       photo: f.photo,
-      createdAt: new Date().toISOString()
+      createdAt: f.editing ? (S.transactions.find(function (t) { return t.id === f.editing; }) || {}).createdAt || new Date().toISOString() : new Date().toISOString()
     };
-    splits.forEach(function (s) {
-      S.addTransaction(Object.assign({}, base, {
-        id: U.uid('tx'),
-        amount: s.amount,
-        categoryId: s.catId,
-        subcategoryId: s.subId,
-        detailId: s.detailId,
-        detailChildId: s.detailChildId || null
-      }));
-    });
-    V.toast('记好了', (kind === 'income' ? '收入 ' : '支出 ') + U.moneyPlain(amount) + ' 已拆成 ' + splits.length + ' 笔入账', 'success');
+    if (f.editing) {
+      S.updateTransaction(payload);
+      V.toast('改好了', '多分类账单已更新', 'success');
+    } else {
+      S.addTransaction(payload);
+      V.toast('记好了', (kind === 'income' ? '收入 ' : '支出 ') + U.moneyPlain(amount) + ' 已同时计入 ' + entries.length + ' 个分类', 'success');
+    }
     M.close();
     V.refresh();
   }
@@ -245,6 +256,11 @@
     if (!amount || amount <= 0) { V.toast('金额不对', '请输入大于 0 的金额', 'danger'); return; }
     const card = S.cardById(f.cardId);
     if (!card) return;
+    const cardBal = S.cardBalance(card.id);
+    if ((f.op === 'expense' || f.op === 'withdraw') && cardBal - amount < -0.001) {
+      V.toast('余额不足', card.name + ' 当前余额 ' + U.moneyPlain(cardBal) + '，卡片余额不能为负', 'danger');
+      return;
+    }
     let catId = null, subId = null;
     if (f.op === 'expense' || f.op === 'income') {
       catId = f.catId;
@@ -283,6 +299,11 @@
     const amount = parseFloat(U.qs('#trAmount').value);
     if (!from || !to || from === to) { V.toast('卡片选择不对', '转出和转入需要是不同卡片', 'danger'); return; }
     if (!amount || amount <= 0) { V.toast('金额不对', '请输入大于 0 的金额', 'danger'); return; }
+    const fromBal = S.cardBalance(from);
+    if (fromBal - amount < -0.001) {
+      V.toast('余额不足', ((S.cardById(from) || {}).name || '') + ' 当前余额 ' + U.moneyPlain(fromBal) + '，卡片余额不能为负', 'danger');
+      return;
+    }
     S.addTransfer({
       id: U.uid('tr'),
       fromCardId: from,
@@ -358,6 +379,7 @@
       amount: U.round2(amount),
       categoryId: U.qs('#goalCategory').value || null,
       thresholds: thresholds,
+      message: U.qs('#goalMessage').value.trim(),
       active: true,
       createdAt: id ? ((S.goals.find(function (g) { return g.id === id; }) || {}).createdAt || new Date().toISOString()) : new Date().toISOString()
     };
@@ -368,11 +390,21 @@
     V.refresh();
   }
 
+  function categoryNameConflict(name, ignore) {
+    const owner = S.categoryNameOwner(name, ignore);
+    if (owner) {
+      V.toast('名称重复', '已有同名' + owner.level + '“' + owner.name + '”，所有分类名称必须全局唯一', 'danger');
+      return true;
+    }
+    return false;
+  }
+
   function saveCategory() {
     const catId = V._editCategoryId;
     const type = U.qs('#catType').value;
     const name = U.qs('#catName').value.trim();
     if (!name) { V.toast('缺名称', '请输入分类名称', 'danger'); return; }
+    if (categoryNameConflict(name, catId ? { catId: catId } : null)) return;
     const color = U.qs('#catColor').value;
     const icon = U.qs('#catIcon').value.trim() || '📦';
     if (catId) {
@@ -384,7 +416,7 @@
     } else {
       S.addCategory({
         id: U.uid('c'), name: name, type: type, color: color, icon: icon, system: false,
-        subs: [{ id: U.uid('sub'), name: '其他', color: mix(color, '#ffffff', 0.5) }]
+        subs: []
       });
     }
     M.close();
@@ -397,6 +429,7 @@
     if (!target) return;
     const name = U.qs('#subName').value.trim();
     if (!name) { V.toast('缺名称', '请输入小类名称', 'danger'); return; }
+    if (categoryNameConflict(name, target.subId ? { catId: target.catId, subId: target.subId } : null)) return;
     const color = U.qs('#subColor').value;
     const cat = S.categoryById(target.catId);
     if (!cat) return;
@@ -416,6 +449,13 @@
     const id = V._editCardId;
     const name = U.qs('#cardName').value.trim();
     if (!name) { V.toast('缺名称', '请输入卡片名称', 'danger'); return; }
+    const dup = S.cards.some(function (c) {
+      return c.id !== id && String(c.name || '').trim().toLowerCase() === name.toLowerCase();
+    });
+    if (dup) {
+      V.toast('名称重复', '已有一张同名卡片，请换一个名称', 'danger');
+      return;
+    }
     const payload = {
       id: id || U.uid('card'),
       name: name,
@@ -473,11 +513,17 @@
         V.go(view);
         const sidebar = U.qs('#sidebar');
         if (sidebar) sidebar.classList.remove('is-open');
+        const backdrop = U.qs('#sidebarBackdrop');
+        if (backdrop) backdrop.classList.remove('is-visible');
       }
       return;
     }
     const el = e.target.closest('[data-action]');
     if (!el) return;
+    if (el.hasAttribute('data-skip-click')) {
+      el.removeAttribute('data-skip-click');
+      return;
+    }
     const action = el.getAttribute('data-action');
     const val = function (key) { return el.getAttribute(key); };
 
@@ -485,8 +531,9 @@
       case 'close-modal': M.close(); break;
 
       case 'tx-multi':
-        if (V._txForm.editing) { V.toast('暂不支持', '编辑已有账单时请使用单分类', 'warn'); break; }
+        if (V._txForm.editing && !V._txForm.multi) { V.toast('暂不支持', '先取消多分类再编辑单分类账单', 'warn'); break; }
         V._txForm.multi = !V._txForm.multi;
+        V._txForm.suppressAutoFill = false;
         if (V._txForm.multi) {
           if (!V._txForm.selections.length) {
             const cats = S.categoriesByType(V._txForm.type);
@@ -494,9 +541,6 @@
             const cat = S.categoryById(V._txForm.catId);
             V._txForm.selections = [{ catId: V._txForm.catId, subId: cat && cat.subs.length ? cat.subs[0].id : null, detailId: null, amount: 0 }];
           }
-          const total = parseFloat(U.qs('#txAmount').value);
-          const n = V._txForm.selections.length;
-          if (total > 0 && n > 1) V._txForm.selections.forEach(function (s) { s.amount = Math.round(total / n * 100) / 100; });
         } else {
           V._txForm.selections = [];
         }
@@ -508,6 +552,7 @@
         V._txForm.subEdit = null; V._txForm.detailId = null; V._txForm.detailEdit = null;
         V._txForm.detailChildId = null; V._txForm.detailChildEdit = null; V._txForm.catEdit = null;
         V._txForm.multi = false; V._txForm.selections = [];
+        V._txForm.suppressAutoFill = false;
         M.updateTxUi();
         M.applyDefaultCard();
         break;
@@ -517,6 +562,7 @@
         V._txForm.catEdit = null;
         if (V._txForm.multi) {
           const catId = val('data-cat-id');
+          V._txForm.suppressAutoFill = false;
           const has = V._txForm.selections.some(function (s) { return s.catId === catId; });
           if (has) {
             V._txForm.selections = V._txForm.selections.filter(function (s) { return s.catId !== catId; });
@@ -591,6 +637,7 @@
         if (!name) { V.toast('缺名称', '请输入大类名称', 'danger'); break; }
         const icon = U.qs('#catEditIcon').value.trim() || '📦';
         const color = U.qs('#catEditColor').value;
+        if (categoryNameConflict(name, f.catEdit.catId ? { catId: f.catEdit.catId } : null)) break;
         const cat = f.catEdit.catId ? S.categoryById(f.catEdit.catId) : null;
         if (cat) {
           cat.name = name;
@@ -643,6 +690,7 @@
         if (!sub || !f.detailEdit) break;
         const name = U.qs('#detailEditName').value.trim();
         if (!name) { V.toast('缺名称', '请输入细分类名称', 'danger'); break; }
+        if (categoryNameConflict(name, f.detailEdit.mode === 'edit' && f.detailEdit.detailId ? { catId: f.catId, subId: f.subId, detailId: f.detailEdit.detailId } : null)) break;
         const color = U.qs('#detailEditColor').value;
         if (!Array.isArray(sub.children)) sub.children = [];
         if (f.detailEdit.mode === 'edit' && f.detailEdit.detailId) {
@@ -669,18 +717,13 @@
       case 'tx-detail-delete':
         confirmAction('删除细分类', '删除后不影响已有账单，确定删除这个细分类吗？', function () {
           const f = V._txForm;
-          const sub = S.subById(f.catId, f.subId);
-          const cat = S.categoryById(f.catId);
-          if (sub && cat) {
-            sub.children = (sub.children || []).filter(function (d) { return d.id !== f.detailEdit.detailId; });
-            S.updateCategory(cat);
-            f.detailId = null;
-            f.detailChildId = null;
-            f.detailChildEdit = null;
-            f.detailEdit = null;
-            M.updateTxUi();
-            V.toast('已删除', '细分类已移除', 'success');
-          }
+          if (f.detailEdit && f.detailEdit.detailId) S.deleteDetail(f.catId, f.subId, f.detailEdit.detailId);
+          f.detailId = null;
+          f.detailChildId = null;
+          f.detailChildEdit = null;
+          f.detailEdit = null;
+          M.updateTxUi();
+          V.toast('已删除', '细分类已移除', 'success');
         });
         break;
       case 'tx-detailchild-add':
@@ -702,6 +745,7 @@
         if (!sub || !detail || !f.detailChildEdit) break;
         const name = U.qs('#detailChildEditName').value.trim();
         if (!name) { V.toast('缺名称', '请输入小类名称', 'danger'); break; }
+        if (categoryNameConflict(name, f.detailChildEdit.mode === 'edit' && f.detailChildEdit.childId ? { catId: f.catId, subId: f.subId, detailId: f.detailId, detailChildId: f.detailChildEdit.childId } : null)) break;
         const color = U.qs('#detailChildEditColor').value;
         if (!Array.isArray(detail.children)) detail.children = [];
         if (f.detailChildEdit.mode === 'edit' && f.detailChildEdit.childId) {
@@ -726,17 +770,11 @@
       case 'tx-detailchild-delete':
         confirmAction('删除小类', '删除后不影响已有账单，确定删除这个小类吗？', function () {
           const f = V._txForm;
-          const sub = S.subById(f.catId, f.subId);
-          const detail = sub ? S.detailById(f.catId, f.subId, f.detailId) : null;
-          const cat = S.categoryById(f.catId);
-          if (sub && detail && cat) {
-            detail.children = (detail.children || []).filter(function (x) { return x.id !== f.detailChildEdit.childId; });
-            S.updateCategory(cat);
-            f.detailChildId = null;
-            f.detailChildEdit = null;
-            M.updateTxUi();
-            V.toast('已删除', '小类已移除', 'success');
-          }
+          if (f.detailChildEdit && f.detailChildEdit.childId) S.deleteDetailChild(f.catId, f.subId, f.detailId, f.detailChildEdit.childId);
+          f.detailChildId = null;
+          f.detailChildEdit = null;
+          M.updateTxUi();
+          V.toast('已删除', '小类已移除', 'success');
         });
         break;
       case 'tx-sub-add':
@@ -756,6 +794,7 @@
         if (!cat || !f.subEdit) break;
         const name = U.qs('#subEditName').value.trim();
         if (!name) { V.toast('缺名称', '请输入小类名称', 'danger'); break; }
+        if (categoryNameConflict(name, f.subEdit.mode === 'edit' && f.subEdit.subId ? { catId: f.catId, subId: f.subEdit.subId } : null)) break;
         const color = U.qs('#subEditColor').value;
         if (f.subEdit.mode === 'edit' && f.subEdit.subId) {
           const sub = cat.subs.find(function (s) { return s.id === f.subEdit.subId; });
@@ -780,20 +819,12 @@
       case 'tx-sub-delete':
         confirmAction('删除小类', '删除后不影响已有账单，确定删除这个小类吗？', function () {
           const f = V._txForm;
-          const cat = S.categoryById(f.catId);
-          if (cat) {
-            cat.subs = cat.subs.filter(function (s) { return s.id !== f.subEdit.subId; });
-            Store.state.transactions = Store.state.transactions.map(function (t) {
-              if (t.subcategoryId === f.subEdit.subId) t.detailId = null;
-              return t;
-            });
-            S.updateCategory(cat);
-            f.subId = null;
-            f.subEdit = null;
-            f.detailId = null;
-            M.updateTxUi();
-            V.toast('已删除', '小类已移除', 'success');
-          }
+          if (f.subEdit && f.subEdit.subId) S.deleteSubcategory(f.catId, f.subEdit.subId);
+          f.subId = null;
+          f.subEdit = null;
+          f.detailId = null;
+          M.updateTxUi();
+          V.toast('已删除', '小类已移除', 'success');
         });
         break;
       case 'tx-mood':
@@ -925,17 +956,9 @@
         confirmAction('删除小类', '删除后不会影响已有账单，确定删除这个小类吗？', function () {
           const catId = val('data-cat-id');
           const subId = val('data-sub-id');
-          const cat = S.categoryById(catId);
-          if (cat) {
-            cat.subs = cat.subs.filter(function (s) { return s.id !== subId; });
-            Store.state.transactions = Store.state.transactions.map(function (t) {
-              if (t.subcategoryId === subId) t.detailId = null;
-              return t;
-            });
-            S.updateCategory(cat);
-            V.toast('已删除', '小类已经移除', 'success');
-            V.refresh();
-          }
+          S.deleteSubcategory(catId, subId);
+          V.toast('已删除', '小类已经移除', 'success');
+          V.refresh();
         });
         break;
       case 'save-sub': saveSub(); break;
@@ -956,18 +979,9 @@
           const catId = val('data-cat-id');
           const subId = val('data-sub-id');
           const detailId = val('data-detail-id');
-          const cat = S.categoryById(catId);
-          const sub = cat && cat.subs.find(function (s) { return s.id === subId; });
-          if (cat && sub) {
-            sub.children = (sub.children || []).filter(function (d) { return d.id !== detailId; });
-            Store.state.transactions = Store.state.transactions.map(function (t) {
-              if (t.detailId === detailId) t.detailId = null;
-              return t;
-            });
-            S.updateCategory(cat);
-            V.toast('已删除', '细分类已经移除', 'success');
-            V.refresh();
-          }
+          S.deleteDetail(catId, subId, detailId);
+          V.toast('已删除', '细分类已经移除', 'success');
+          V.refresh();
         });
         break;
       case 'save-detail': {
@@ -975,6 +989,7 @@
         if (!target) break;
         const name = U.qs('#detailName').value.trim();
         if (!name) { V.toast('缺名称', '请输入细分类名称', 'danger'); break; }
+        if (categoryNameConflict(name, target.detailId ? { catId: target.catId, subId: target.subId, detailId: target.detailId } : null)) break;
         const color = U.qs('#detailColor').value;
         const cat = S.categoryById(target.catId);
         const sub = cat && cat.subs.find(function (s) { return s.id === target.subId; });
@@ -993,10 +1008,67 @@
         break;
       }
 
+      case 'add-detailchild':
+        V._detailChildTarget = null;
+        M.openDetailChild(val('data-cat-id'), val('data-sub-id'), val('data-detail-id'), null);
+        break;
+      case 'edit-detailchild': {
+        const cat = S.categoryById(val('data-cat-id'));
+        const sub = cat && cat.subs.find(function (s) { return s.id === val('data-sub-id'); });
+        const detail = sub && S.detailById(cat.id, sub.id, val('data-detail-id'));
+        const child = detail && (detail.children || []).find(function (x) { return x.id === val('data-detail-child-id'); });
+        if (child) M.openDetailChild(cat.id, sub.id, detail.id, child);
+        break;
+      }
+      case 'delete-detailchild':
+        confirmAction('删除小类', '删除后不会影响已有账单，确定删除这个小类吗？', function () {
+          const catId = val('data-cat-id');
+          const subId = val('data-sub-id');
+          const detailId = val('data-detail-id');
+          const childId = val('data-detail-child-id');
+          S.deleteDetailChild(catId, subId, detailId, childId);
+          V.toast('已删除', '小类已经移除', 'success');
+          V.refresh();
+        });
+        break;
+      case 'save-detailchild': {
+        const target = V._detailChildTarget;
+        if (!target) break;
+        const name = U.qs('#detailChildName').value.trim();
+        if (!name) { V.toast('缺名称', '请输入小类名称', 'danger'); break; }
+        if (categoryNameConflict(name, target.childId ? { catId: target.catId, subId: target.subId, detailId: target.detailId, detailChildId: target.childId } : null)) break;
+        const color = U.qs('#detailChildColor').value;
+        const cat = S.categoryById(target.catId);
+        const sub = cat && cat.subs.find(function (s) { return s.id === target.subId; });
+        const detail = sub && S.detailById(cat.id, sub.id, target.detailId);
+        if (!cat || !sub || !detail) break;
+        if (!Array.isArray(detail.children)) detail.children = [];
+        if (target.childId) {
+          const x = detail.children.find(function (c) { return c.id === target.childId; });
+          if (x) { x.name = name; x.color = color; }
+        } else {
+          detail.children.push({ id: U.uid('detailchild'), name: name, color: color });
+        }
+        S.updateCategory(cat);
+        M.close();
+        V.toast('小类已' + (target.childId ? '更新' : '添加'), name, 'success');
+        V.refresh();
+        break;
+      }
+
       case 'add-card':
         V._editCardId = null;
         M.openCard(null);
         break;
+      case 'card-color': {
+        const colorInput = U.qs('#cardColor');
+        if (!colorInput) break;
+        colorInput.value = val('data-color');
+        U.qsa('.color-swatch').forEach(function (b) {
+          b.classList.toggle('is-active', (b.getAttribute('data-color') || '').toLowerCase() === colorInput.value.toLowerCase());
+        });
+        break;
+      }
       case 'edit-card': {
         const card = S.cardById(val('data-card-id'));
         if (card) { V._editCardId = card.id; M.openCard(card); }
@@ -1037,6 +1109,23 @@
           V.toast('已保存', '显示名称已更新', 'success');
           V.renderSettings();
         });
+        break;
+      }
+      case 'save-profile-name': {
+        S.updateProfileName(U.qs('#profileName').value).then(function (res) {
+          if (!res.ok) { V.toast('保存失败', res.msg, 'danger'); return; }
+          updateUserChip();
+          V.toast('已保存', '昵称已更新', 'success');
+          window.Modals.openProfile();
+        });
+        break;
+      }
+      case 'save-ncode': {
+        const res = S.updateNcode(U.qs('#profileNcode').value);
+        if (!res.ok) { V.toast('保存失败', res.msg, 'danger'); return; }
+        updateUserChip();
+        V.toast('已保存', 'N码已更新', 'success');
+        window.Modals.openProfile();
         break;
       }
       case 'save-password': {
@@ -1139,6 +1228,7 @@
 
       case 'overview-period':
         V.periodType = val('data-type');
+        V.overviewRange = null;
         V.drill = null;
         V.drillSub = null;
         V.drillDetail = null;
@@ -1146,6 +1236,7 @@
         break;
       case 'overview-prev':
         V.periodAnchor = V.periodType === 'month' ? U.monthAdd(V.periodAnchor, -1) : U.dateAdd(V.periodAnchor, V.periodType === 'week' ? -7 : -1);
+        V.overviewRange = null;
         V.drill = null;
         V.drillSub = null;
         V.drillDetail = null;
@@ -1153,6 +1244,7 @@
         break;
       case 'overview-next':
         V.periodAnchor = V.periodType === 'month' ? U.monthAdd(V.periodAnchor, 1) : U.dateAdd(V.periodAnchor, V.periodType === 'week' ? 7 : 1);
+        V.overviewRange = null;
         V.drill = null;
         V.drillSub = null;
         V.drillDetail = null;
@@ -1160,9 +1252,14 @@
         break;
       case 'overview-today':
         V.periodAnchor = U.todayStr();
+        V.overviewRange = null;
         V.drill = null;
         V.drillSub = null;
         V.drillDetail = null;
+        V.renderOverview();
+        break;
+      case 'overview-range-clear':
+        V.overviewRange = null;
         V.renderOverview();
         break;
       case 'chart-toggle':
@@ -1212,6 +1309,7 @@
         V.calMode = val('data-mode');
         V.calDetail = null;
         V.calTimeSel = null;
+        V.calWeekExpand = null;
         V.renderCalendar();
         break;
       case 'cal-prev':
@@ -1219,8 +1317,10 @@
         else if (V.calMode === 'year') V.calAnchor = U.yearAdd(V.calAnchor, -1);
         else if (V.calMode === 'week') V.calAnchor = U.dateAdd(V.calAnchor, -7);
         else V.calAnchor = U.dateAdd(V.calAnchor, -1);
+        if (V.calMode === 'day') V.calSelected = V.calAnchor;
         V.calDetail = null;
         V.calTimeSel = null;
+        V.calWeekExpand = null;
         V.renderCalendar();
         break;
       case 'cal-next':
@@ -1228,8 +1328,10 @@
         else if (V.calMode === 'year') V.calAnchor = U.yearAdd(V.calAnchor, 1);
         else if (V.calMode === 'week') V.calAnchor = U.dateAdd(V.calAnchor, 7);
         else V.calAnchor = U.dateAdd(V.calAnchor, 1);
+        if (V.calMode === 'day') V.calSelected = V.calAnchor;
         V.calDetail = null;
         V.calTimeSel = null;
+        V.calWeekExpand = null;
         V.renderCalendar();
         break;
       case 'cal-today':
@@ -1237,6 +1339,7 @@
         V.calSelected = U.todayStr();
         V.calDetail = null;
         V.calTimeSel = null;
+        V.calWeekExpand = null;
         V.renderCalendar();
         break;
       case 'cal-day': {
@@ -1245,6 +1348,7 @@
         V.calSelected = date;
         V.calDetail = null;
         V.calTimeSel = null;
+        if (V.calMode === 'week') V.calWeekExpand = date;
         if (V.calMode === 'month' && !U.sameMonth(date, V.calAnchor)) {
           V.calAnchor = U.startOfMonth(date);
         }
@@ -1270,13 +1374,37 @@
           V.calSelected = date;
           const openMin = sel.startMin;
           V.calTimeSel = null;
+          V._timeOpenAt = Date.now();
+          V.renderCalendar();
           M.openAddTx(null, date);
           const timeInput = U.qs('#txTime');
           if (timeInput) timeInput.value = U.pad2(Math.floor(openMin / 60)) + ':' + U.pad2(openMin % 60);
         } else {
           V.calTimeSel = { date: date, startMin: start };
           V.calSelected = date;
-          V.renderCalendar();
+          U.qsa('.time-block.is-selected').forEach(function (b) {
+            b.classList.remove('is-selected');
+            const plus = b.querySelector('.time-plus');
+            const label = b.querySelector('.time-sel-label');
+            if (plus) plus.remove();
+            if (label) label.remove();
+          });
+          el.classList.add('is-selected');
+          if (!el.querySelector('.time-plus')) {
+            const plus = document.createElement('span');
+            plus.className = 'time-plus';
+            plus.textContent = '+';
+            el.appendChild(plus);
+          }
+          const curLabel = el.querySelector('.time-sel-label');
+          if (curLabel) curLabel.textContent = U.pad2(Math.floor(start / 60)) + ':' + U.pad2(start % 60);
+          else {
+            const label = document.createElement('span');
+            label.className = 'time-sel-label';
+            label.textContent = U.pad2(Math.floor(start / 60)) + ':' + U.pad2(start % 60);
+            el.appendChild(label);
+          }
+          V.attachTimeGrid();
         }
         break;
       }
@@ -1311,6 +1439,29 @@
         break;
       }
     }
+  });
+
+  document.addEventListener('dblclick', function (e) {
+    if (e.target.closest('.cal-holiday-pill, .schedule-row, .cal-week-day .pill')) return;
+    const timeBlock = e.target.closest('[data-action="cal-time"]');
+    if (timeBlock) {
+      if (Date.now() - (V._timeOpenAt || 0) < 450) return;
+      const date = timeBlock.getAttribute('data-date');
+      const start = +timeBlock.getAttribute('data-start');
+      const openMin = V.calTimeSel && V.calTimeSel.date === date ? V.calTimeSel.startMin : start;
+      V._timeOpenAt = Date.now();
+      V.calSelected = date;
+      V.calTimeSel = null;
+      V.renderCalendar();
+      M.openAddTx(null, date);
+      const timeInput = U.qs('#txTime');
+      if (timeInput) timeInput.value = U.pad2(Math.floor(openMin / 60)) + ':' + U.pad2(openMin % 60);
+      return;
+    }
+    const cell = e.target.closest('[data-action="cal-day"]');
+    if (!cell) return;
+    const date = cell.getAttribute('data-date');
+    if (date) M.openAddTx(null, date);
   });
 
   // ---------- 输入/变更委托 ----------
@@ -1384,6 +1535,16 @@
       });
       return;
     }
+    const overviewRange = target.closest('[data-action="overview-range"]');
+    if (overviewRange) {
+      const key = overviewRange.getAttribute('data-key');
+      V.overviewRange = V.overviewRange || { from: '', to: '' };
+      V.overviewRange[key] = target.value;
+      if (V.overviewRange.from && V.overviewRange.to && V.overviewRange.from <= V.overviewRange.to) {
+        V.renderOverview();
+      }
+      return;
+    }
     const filterEl = target.closest('[data-action="bills-filter"]');
     if (filterEl) {
       V.billsFilter[filterEl.getAttribute('data-key')] = target.value;
@@ -1410,16 +1571,79 @@
       S.updateSettings({ [toggle.getAttribute('data-key')]: target.checked });
       return;
     }
+    const morning = target.closest('[data-action="morning-time"]');
+    if (morning) {
+      S.updateSettings({ defaultMorningTime: target.value || '08:00' });
+      V.toast('已保存', '默认记账时间已更新', 'success');
+      return;
+    }
   });
 
   document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter' || e.target.tagName !== 'INPUT' || S.settings.enterToSubmit === false) return;
+    if (e.key !== 'Enter') return;
     const modal = e.target.closest('.modal');
     if (!modal) return;
-    const saveBtn = modal.querySelector('.modal-foot .primary-btn, .modal-foot .danger-btn');
-    if (saveBtn && !saveBtn.disabled) {
-      e.preventDefault();
-      saveBtn.click();
+    const field = e.target.closest('input, textarea');
+    if (!field) return;
+    const st = S.settings;
+    if (e.isComposing) return;
+    if (e.shiftKey) return;
+    if (st.enterToSubmit === false) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    field._enterPressAt = Date.now();
+    clearTimeout(field._enterNewlineTimer);
+    clearTimeout(field._enterSubmitTimer);
+    field._enterNewlineDone = false;
+    if (field.tagName === 'TEXTAREA' && st.enterLongPressNewline !== false) {
+      field._enterNewlineTimer = setTimeout(function () {
+        if (field._enterNewlineDone) return;
+        if (field.setRangeText) {
+          const pos = field.selectionStart == null ? (field.value || '').length : field.selectionStart;
+          field.setRangeText('\n', pos, pos, 'end');
+        } else {
+          field.value = (field.value || '') + '\n';
+        }
+        field._enterNewlineDone = true;
+        clearTimeout(field._enterSubmitTimer);
+      }, 500);
+    }
+  });
+
+  document.addEventListener('blur', function (e) {
+    const field = e.target;
+    if (!field || !field.closest || !field.closest('.modal')) return;
+    if (field.tagName !== 'TEXTAREA' && field.tagName !== 'INPUT') return;
+    clearTimeout(field._enterNewlineTimer);
+    clearTimeout(field._enterSubmitTimer);
+    field._enterNewlineDone = false;
+    field._enterPressAt = 0;
+  }, true);
+
+  document.addEventListener('keyup', function (e) {
+    if (e.key !== 'Enter') return;
+    const field = e.target.closest('input, textarea');
+    if (field) {
+      const st = S.settings;
+      if (e.isComposing) return;
+      if (st.enterToSubmit === false) return;
+      const wasNewline = field._enterNewlineDone;
+      clearTimeout(field._enterNewlineTimer);
+      clearTimeout(field._enterSubmitTimer);
+      if (wasNewline) {
+        field._enterNewlineDone = false;
+        return;
+      }
+      const heldMs = Date.now() - (field._enterPressAt || 0);
+      if (heldMs < 500) {
+        const editor = field.closest('.bg-option');
+        const modal = field.closest('.modal');
+        if (modal) {
+          const saveBtn = editor ? editor.querySelector('.primary-btn') : modal.querySelector('.modal-foot .primary-btn, .modal-foot .danger-btn');
+          if (saveBtn && !saveBtn.disabled) saveBtn.click();
+        }
+      }
+      field._enterNewlineDone = false;
     }
   });
 
@@ -1458,14 +1682,30 @@
   });
 
   U.qs('#quickAddBtn').addEventListener('click', function () {
-    M.openAddTx(null);
+    if (V.currentView === 'calendar' && V.calSelected) {
+      M.openAddTx(null, V.calSelected);
+    } else {
+      M.openAddTx(null);
+    }
+  });
+
+  U.qs('#profileBtn').addEventListener('click', function () {
+    M.openProfile();
   });
 
   U.qs('#mobileMenuBtn').addEventListener('click', function () {
     U.qs('#sidebar').classList.add('is-open');
+    const backdrop = U.qs('#sidebarBackdrop');
+    if (backdrop) backdrop.classList.add('is-visible');
   });
   U.qs('#sidebarCloseBtn').addEventListener('click', function () {
     U.qs('#sidebar').classList.remove('is-open');
+    const backdrop = U.qs('#sidebarBackdrop');
+    if (backdrop) backdrop.classList.remove('is-visible');
+  });
+  U.qs('#sidebarBackdrop').addEventListener('click', function () {
+    U.qs('#sidebar').classList.remove('is-open');
+    U.qs('#sidebarBackdrop').classList.remove('is-visible');
   });
   U.qs('#logoutBtn').addEventListener('click', function () {
     S.logout();

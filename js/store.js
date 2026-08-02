@@ -56,15 +56,15 @@
         { id: 'c-housing-4', name: '家居', color: '#c7d2fe' }
       ] },
     { id: 'c-other', name: '其他', type: 'expense', color: '#94a3b8', icon: '📦', system: true,
-      subs: [{ id: 'c-other-1', name: '其他', color: '#cbd5e1' }] }
+      subs: [{ id: 'c-other-1', name: '其他支出', color: '#cbd5e1' }] }
   ];
 
   const DEFAULT_INCOME_CATEGORIES = [
     { id: 'ci-salary', name: '工资', type: 'income', color: '#0d9488', icon: '💰', system: true, subs: [{ id: 'ci-salary-1', name: '月薪', color: '#14b8a6' }] },
-    { id: 'ci-part', name: '兼职', type: 'income', color: '#f59e0b', icon: '💼', system: true, subs: [{ id: 'ci-part-1', name: '兼职', color: '#fbbf24' }] },
+    { id: 'ci-part', name: '兼职', type: 'income', color: '#f59e0b', icon: '💼', system: true, subs: [{ id: 'ci-part-1', name: '兼职收入', color: '#fbbf24' }] },
     { id: 'ci-invest', name: '理财', type: 'income', color: '#10b981', icon: '📈', system: true, subs: [{ id: 'ci-invest-1', name: '利息', color: '#34d399' }] },
-    { id: 'ci-redpacket', name: '红包', type: 'income', color: '#ef4444', icon: '🧧', system: true, subs: [{ id: 'ci-redpacket-1', name: '红包', color: '#f87171' }] },
-    { id: 'ci-other', name: '其他收入', type: 'income', color: '#64748b', icon: '✨', system: true, subs: [{ id: 'ci-other-1', name: '其他', color: '#94a3b8' }] }
+    { id: 'ci-redpacket', name: '红包', type: 'income', color: '#ef4444', icon: '🧧', system: true, subs: [{ id: 'ci-redpacket-1', name: '红包收入', color: '#f87171' }] },
+    { id: 'ci-other', name: '其他收入', type: 'income', color: '#64748b', icon: '✨', system: true, subs: [{ id: 'ci-other-1', name: '杂项收入', color: '#94a3b8' }] }
   ];
 
   const DEFAULT_SETTINGS = {
@@ -77,6 +77,8 @@
     playfulReminders: true,
     showToasts: true,
     enterToSubmit: true,
+    enterLongPressNewline: true,
+    defaultMorningTime: '08:00',
     defaultCardId: '',
     currencySymbol: '¥'
   };
@@ -94,6 +96,20 @@
     h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
     h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
     return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+  }
+
+  function genNcode(users) {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    for (let i = 0; i < 80; i++) {
+      const len = 6 + Math.floor(Math.random() * 3);
+      let code = '';
+      for (let j = 0; j < len; j++) {
+        if (j === 3) code += '-';
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      if (!users.some(function (u) { return u.ncode && u.ncode.toLowerCase() === code.toLowerCase(); })) return code;
+    }
+    return 'N-' + Date.now().toString(36).toUpperCase();
   }
 
   function mulberry32(seed) {
@@ -126,9 +142,71 @@
     (categories || []).forEach(function (c) {
       (c.subs || []).forEach(function (sub) {
         if (!Array.isArray(sub.children)) sub.children = [];
+        (sub.children || []).forEach(function (d) {
+          if (!Array.isArray(d.children)) d.children = [];
+        });
       });
     });
     return categories;
+  }
+
+  function normCategoryName(name) {
+    return String(name == null ? '' : name).replace(/[\s\u3000]+/g, ' ').trim();
+  }
+
+  function normCategoryKey(name) {
+    return normCategoryName(name).toLowerCase();
+  }
+
+  function migrateCategoryNames(categories) {
+    const used = {};
+    const renamed = [];
+    const markUsed = function (name) {
+      const key = normCategoryKey(name);
+      if (key) used[key] = true;
+    };
+    const uniqueName = function (name, hint) {
+      let base = normCategoryName(name);
+      if (!base) return base;
+      let candidate = base;
+      if (hint) candidate = base + '-' + hint;
+      if (!used[normCategoryKey(candidate)]) return candidate;
+      let i = 2;
+      while (used[normCategoryKey(base + '-' + i)]) i++;
+      return base + '-' + i;
+    };
+    (categories || []).forEach(function (c) {
+      const catName = normCategoryName(c.name);
+      const finalCat = used[normCategoryKey(catName)] ? uniqueName(catName, '') : catName;
+      if (finalCat !== c.name) renamed.push({ from: c.name, to: finalCat, level: '大类' });
+      c.name = finalCat;
+      markUsed(finalCat);
+      (c.subs || []).forEach(function (sub) {
+        const subHint = c.type === 'income' ? '收入' : '支出';
+        const subName = normCategoryName(sub.name);
+        const finalSub = used[normCategoryKey(subName)] ? uniqueName(subName, subHint) : subName;
+        if (finalSub !== sub.name) renamed.push({ from: sub.name, to: finalSub, level: '小类' });
+        sub.name = finalSub;
+        markUsed(finalSub);
+        (sub.children || []).forEach(function (d) {
+          const detailHint = normCategoryName(sub.name);
+          const detailName = normCategoryName(d.name);
+          const finalDetail = used[normCategoryKey(detailName)] ? uniqueName(detailName, detailHint) : detailName;
+          if (finalDetail !== d.name) renamed.push({ from: d.name, to: finalDetail, level: '细类' });
+          d.name = finalDetail;
+          markUsed(finalDetail);
+          (d.children || []).forEach(function (x) {
+            const childHint = normCategoryName(d.name);
+            const childName = normCategoryName(x.name);
+            const finalChild = used[normCategoryKey(childName)] ? uniqueName(childName, childHint) : childName;
+            if (finalChild !== x.name) renamed.push({ from: x.name, to: finalChild, level: '细类子级' });
+            x.name = finalChild;
+            markUsed(finalChild);
+          });
+        });
+      });
+    });
+    return renamed;
   }
 
   function normalizeState(data) {
@@ -144,6 +222,7 @@
     if (!Array.isArray(data.schedules)) data.schedules = [];
     if (!Array.isArray(data.alertLog)) data.alertLog = [];
     ensureChildren(data.categories);
+    migrateCategoryNames(data.categories);
     return data;
   }
 
@@ -316,6 +395,14 @@
       try {
         this.users = JSON.parse(localStorage.getItem(LS_USERS)) || [];
       } catch (e) { this.users = []; }
+      let changed = false;
+      this.users.forEach(function (u) {
+        if (!u.ncode) {
+          u.ncode = genNcode(this.users);
+          changed = true;
+        }
+      }, this);
+      if (changed) this.saveUsers();
       try {
         this.session = JSON.parse(localStorage.getItem(LS_SESSION));
       } catch (e) { this.session = null; }
@@ -376,7 +463,7 @@
       if (this.users.some(function (u) { return u.name.toLowerCase() === name.toLowerCase(); })) {
         return { ok: false, msg: '这个用户名已经被使用啦' };
       }
-      const user = { id: U.uid('user'), name: name, pass: hashPassword(pass), createdAt: new Date().toISOString(), demo: false };
+      const user = { id: U.uid('user'), name: name, ncode: genNcode(this.users), pass: hashPassword(pass), createdAt: new Date().toISOString(), demo: false };
       this.users.push(user);
       this.saveUsers();
       this.setSession(user.id);
@@ -388,7 +475,9 @@
 
     login: async function (name, pass) {
       name = String(name || '').trim();
-      const user = this.users.find(function (u) { return u.name.toLowerCase() === name.toLowerCase(); });
+      const user = this.users.find(function (u) {
+        return u.name.toLowerCase() === name.toLowerCase() || (u.ncode && u.ncode.toLowerCase() === name.toLowerCase());
+      });
       if (!user) return { ok: false, msg: '没找到这个用户，先注册一个吧' };
       if (user.pass !== hashPassword(pass || '')) return { ok: false, msg: '密码不对哦，再想想' };
       this.setSession(user.id);
@@ -403,7 +492,7 @@
         this.save();
         return { ok: true, user: demo };
       }
-      const user = { id: U.uid('user'), name: '体验用户', pass: hashPassword('demo'), createdAt: new Date().toISOString(), demo: true };
+      const user = { id: U.uid('user'), name: '体验用户', ncode: genNcode(this.users), pass: hashPassword('demo'), createdAt: new Date().toISOString(), demo: true };
       this.users.push(user);
       this.saveUsers();
       this.setSession(user.id);
@@ -437,6 +526,24 @@
     currentUserName: function () {
       const u = this.users.find(function (x) { return x.id === this.currentUserId; }, this);
       return u ? u.name : (this.state && this.state.profile ? this.state.profile.name : '访客');
+    },
+
+    currentUserNcode: function () {
+      const u = this.users.find(function (x) { return x.id === this.currentUserId; }, this);
+      return u && u.ncode ? u.ncode : '';
+    },
+
+    updateNcode: function (ncode) {
+      ncode = String(ncode || '').trim().toUpperCase();
+      const u = this.users.find(function (x) { return x.id === this.currentUserId; }, this);
+      if (!u) return { ok: false, msg: '用户不存在' };
+      if (!/^[A-Z0-9-]{4,16}$/.test(ncode)) return { ok: false, msg: 'N码只能包含字母、数字和 -，长度 4-16' };
+      if (this.users.some(function (x) { return x.id !== u.id && x.ncode && x.ncode.toLowerCase() === ncode.toLowerCase(); })) {
+        return { ok: false, msg: '这个 N 码已经被使用啦' };
+      }
+      u.ncode = ncode;
+      this.saveUsers();
+      return { ok: true };
     },
 
     updateProfileName: async function (name) {
@@ -511,6 +618,108 @@
       const x = this.detailChildById(catId, subId, detailId, childId);
       return x ? x.name : '';
     },
+    categoryNameOwner: function (name, ignore) {
+      const key = normCategoryKey(name);
+      if (!key) return null;
+      ignore = ignore || {};
+      let found = null;
+      this.categories.some(function (c) {
+        const editingCat = ignore.catId && c.id === ignore.catId && !ignore.subId && !ignore.detailId && !ignore.detailChildId;
+        if (!editingCat && normCategoryKey(c.name) === key) {
+          found = { level: '大类', name: c.name, catId: c.id };
+          return true;
+        }
+        return (c.subs || []).some(function (s) {
+          const editingSub = ignore.catId === c.id && ignore.subId && s.id === ignore.subId && !ignore.detailId && !ignore.detailChildId;
+          if (!editingSub && normCategoryKey(s.name) === key) {
+            found = { level: '小类', name: s.name, catId: c.id, subId: s.id };
+            return true;
+          }
+          return (s.children || []).some(function (d) {
+            const editingDetail = ignore.catId === c.id && ignore.subId === s.id && ignore.detailId && d.id === ignore.detailId && !ignore.detailChildId;
+            if (!editingDetail && normCategoryKey(d.name) === key) {
+              found = { level: '细类', name: d.name, catId: c.id, subId: s.id, detailId: d.id };
+              return true;
+            }
+            return (d.children || []).some(function (x) {
+              const editingChild = ignore.catId === c.id && ignore.subId === s.id && ignore.detailId === d.id && ignore.detailChildId && x.id === ignore.detailChildId;
+              if (!editingChild && normCategoryKey(x.name) === key) {
+                found = { level: '细类子级', name: x.name, catId: c.id, subId: s.id, detailId: d.id, detailChildId: x.id };
+                return true;
+              }
+              return false;
+            });
+          });
+        });
+      });
+      return found;
+    },
+
+    categoryNameTaken: function (name, ignore) {
+      return !!this.categoryNameOwner(name, ignore);
+    },
+
+    categoriesAreUnique: function () {
+      const used = {};
+      let ok = true;
+      const check = function (node) {
+        const key = normCategoryKey(node.name);
+        if (key) {
+          if (used[key]) ok = false;
+          else used[key] = true;
+        }
+      };
+      this.categories.forEach(function (c) {
+        check(c);
+        (c.subs || []).forEach(function (s) {
+          check(s);
+          (s.children || []).forEach(function (d) {
+            check(d);
+            (d.children || []).forEach(check);
+          });
+        });
+      });
+      return ok;
+    },
+
+    txCatEntries: function (t) {
+      if (Array.isArray(t.multi) && t.multi.length) {
+        return t.multi.map(function (m) {
+          return { categoryId: m.categoryId || t.categoryId, subcategoryId: m.subcategoryId || null, detailId: m.detailId || null, detailChildId: m.detailChildId || null };
+        });
+      }
+      return [{ categoryId: t.categoryId, subcategoryId: t.subcategoryId || null, detailId: t.detailId || null, detailChildId: t.detailChildId || null }];
+    },
+    txInCategory: function (t, catId, subId, detailId) {
+      return this.txCatEntries(t).some(function (e) {
+        if (e.categoryId !== catId) return false;
+        if (subId && e.subcategoryId !== subId) return false;
+        if (detailId && e.detailId !== detailId) return false;
+        return true;
+      });
+    },
+    txCatLabels: function (t) {
+      const self = this;
+      const labels = this.txCatEntries(t).map(function (e) {
+        const parts = [];
+        const cat = self.categoryById(e.categoryId);
+        if (cat) parts.push(cat.name);
+        if (e.subcategoryId) {
+          const sub = self.subById(e.categoryId, e.subcategoryId);
+          if (sub) parts.push(sub.name);
+        }
+        if (e.detailId) {
+          const d = self.detailById(e.categoryId, e.subcategoryId, e.detailId);
+          if (d) parts.push(d.name);
+        }
+        if (e.detailChildId) {
+          const x = self.detailChildById(e.categoryId, e.subcategoryId, e.detailId, e.detailChildId);
+          if (x) parts.push(x.name);
+        }
+        return parts.join('·');
+      }).filter(Boolean);
+      return labels.length ? labels.join(' / ') : '未分类';
+    },
 
     categoriesByType: function (type) {
       return this.categories.filter(function (c) { return c.type === type; });
@@ -551,26 +760,33 @@
 
     byCategory: function (txs) {
       const map = {};
+      const self = this;
       txs.forEach(function (t) {
-        if (!map[t.categoryId]) map[t.categoryId] = { categoryId: t.categoryId, total: 0, count: 0 };
-        map[t.categoryId].total += Number(t.amount) || 0;
-        map[t.categoryId].count += 1;
+        self.txCatEntries(t).forEach(function (e) {
+          if (!map[e.categoryId]) map[e.categoryId] = { categoryId: e.categoryId, total: 0, count: 0 };
+          map[e.categoryId].total += Number(t.amount) || 0;
+          map[e.categoryId].count += 1;
+        });
       });
       const arr = Object.keys(map).map(function (k) { return map[k]; });
       arr.forEach(function (x) { x.total = U.round2(x.total); });
       arr.sort(function (a, b) { return b.total - a.total; });
       const sum = arr.reduce(function (acc, x) { return acc + x.total; }, 0);
       arr.forEach(function (x) { x.pct = sum > 0 ? Math.round(x.total / sum * 1000) / 10 : 0; });
-      return { items: arr, total: U.round2(sum) };
+      const total = txs.reduce(function (acc, t) { return acc + (Number(t.amount) || 0); }, 0);
+      return { items: arr, total: U.round2(total) };
     },
 
     bySubcategory: function (txs, catId) {
       const map = {};
-      txs.filter(function (t) { return t.categoryId === catId; }).forEach(function (t) {
-        const key = t.subcategoryId || 'none';
-        if (!map[key]) map[key] = { subcategoryId: key, total: 0, count: 0 };
-        map[key].total += Number(t.amount) || 0;
-        map[key].count += 1;
+      const self = this;
+      txs.forEach(function (t) {
+        self.txCatEntries(t).filter(function (e) { return e.categoryId === catId; }).forEach(function (e) {
+          const key = e.subcategoryId || 'none';
+          if (!map[key]) map[key] = { subcategoryId: key, total: 0, count: 0 };
+          map[key].total += Number(t.amount) || 0;
+          map[key].count += 1;
+        });
       });
       const arr = Object.keys(map).map(function (k) { return map[k]; });
       arr.forEach(function (x) { x.total = U.round2(x.total); });
@@ -582,11 +798,14 @@
 
     byDetail: function (txs, catId, subId) {
       const map = {};
-      txs.filter(function (t) { return t.categoryId === catId && t.subcategoryId === subId; }).forEach(function (t) {
-        const key = t.detailId || 'none';
-        if (!map[key]) map[key] = { detailId: key, total: 0, count: 0 };
-        map[key].total += Number(t.amount) || 0;
-        map[key].count += 1;
+      const self = this;
+      txs.forEach(function (t) {
+        self.txCatEntries(t).filter(function (e) { return e.categoryId === catId && e.subcategoryId === subId; }).forEach(function (e) {
+          const key = e.detailId || 'none';
+          if (!map[key]) map[key] = { detailId: key, total: 0, count: 0 };
+          map[key].total += Number(t.amount) || 0;
+          map[key].count += 1;
+        });
       });
       const arr = Object.keys(map).map(function (k) { return map[k]; });
       arr.forEach(function (x) { x.total = U.round2(x.total); });
@@ -714,6 +933,15 @@
       const i = this.state.cards.findIndex(function (x) { return x.id === c.id; });
       if (i >= 0) { this.state.cards[i] = c; this.save(); }
     },
+    reorderCards: function (fromId, toId) {
+      const list = this.state.cards;
+      const from = list.findIndex(function (c) { return c.id === fromId; });
+      const to = list.findIndex(function (c) { return c.id === toId; });
+      if (from < 0 || to < 0 || from === to) return;
+      const moved = list.splice(from, 1)[0];
+      list.splice(to, 0, moved);
+      this.save();
+    },
     deleteCard: function (id) {
       this.state.cards = this.state.cards.filter(function (c) { return c.id !== id; });
       this.state.transactions = this.state.transactions.map(function (t) {
@@ -746,21 +974,187 @@
       this.state.schedules = this.state.schedules.filter(function (s) { return s.id !== id; });
       this.save();
     },
-    addCategory: function (c) { this.state.categories.push(c); this.save(); },
-    updateCategory: function (c) {
-      const i = this.state.categories.findIndex(function (x) { return x.id === c.id; });
-      if (i >= 0) { this.state.categories[i] = c; this.save(); }
-    },
-    deleteCategory: function (id) {
-      const fallback = this.categoriesByType(this.categoryById(id) ? this.categoryById(id).type : 'expense').find(function (c) { return c.id !== id; });
-      this.state.categories = this.state.categories.filter(function (c) { return c.id !== id; });
-      if (fallback) {
-        this.state.transactions = this.state.transactions.map(function (t) {
-          if (t.categoryId === id) { t.categoryId = fallback.id; t.subcategoryId = fallback.subs[0] ? fallback.subs[0].id : null; }
-          return t;
-        });
+    addCategory: function (c) {
+      const owner = c ? this.categoryNameOwner(c.name) : null;
+      if (owner) return { ok: false, msg: '分类名称重复：' + owner.name };
+      this.state.categories.push(c);
+      if (!this.categoriesAreUnique()) {
+        this.state.categories.pop();
+        return { ok: false, msg: '分类名称重复' };
       }
       this.save();
+      return { ok: true };
+    },
+    updateCategory: function (c) {
+      const i = this.state.categories.findIndex(function (x) { return x.id === c.id; });
+      if (i < 0) return { ok: false, msg: '分类不存在' };
+      this.state.categories[i] = c;
+      if (!this.categoriesAreUnique()) return { ok: false, msg: '分类名称重复' };
+      this.save();
+      return { ok: true };
+    },
+    reorderCategories: function (type, fromId, toId) {
+      const list = this.categoriesByType(type);
+      const from = list.findIndex(function (c) { return c.id === fromId; });
+      const to = list.findIndex(function (c) { return c.id === toId; });
+      if (from < 0 || to < 0 || from === to) return;
+      const moved = list.splice(from, 1)[0];
+      list.splice(to, 0, moved);
+      const rest = this.state.categories.filter(function (c) { return c.type !== type; });
+      this.state.categories = list.concat(rest);
+      this.save();
+    },
+    deleteCategory: function (id) {
+      const cat = this.categoryById(id);
+      const fallback = this.categoriesByType(cat ? cat.type : 'expense').find(function (c) { return c.id !== id; });
+      const fbSub = fallback && fallback.subs && fallback.subs.length ? fallback.subs[0].id : null;
+      this.state.categories = this.state.categories.filter(function (c) { return c.id !== id; });
+      this.state.transactions = this.state.transactions.map(function (t) {
+        if (t.categoryId === id) {
+          if (fallback) {
+            t.categoryId = fallback.id;
+            t.subcategoryId = fbSub;
+          } else {
+            t.categoryId = null;
+            t.subcategoryId = null;
+          }
+          t.detailId = null;
+          t.detailChildId = null;
+        }
+        if (Array.isArray(t.multi)) {
+          const next = [];
+          t.multi.forEach(function (e) {
+            if (e.categoryId !== id) {
+              next.push(e);
+              return;
+            }
+            if (!fallback) return;
+            const dup = next.some(function (o) {
+              return o.categoryId === fallback.id && (o.subcategoryId || null) === fbSub;
+            });
+            if (!dup) next.push({ categoryId: fallback.id, subcategoryId: fbSub, detailId: null, detailChildId: null });
+          });
+          t.multi = next;
+        }
+        if (Array.isArray(t.multi) && t.multi.length) {
+          if (t.categoryId === id || t.categoryId === null || !t.multi.some(function (e) { return e.categoryId === t.categoryId; })) {
+            t.categoryId = t.multi[0].categoryId;
+            t.subcategoryId = t.multi[0].subcategoryId || null;
+            t.detailId = t.multi[0].detailId || null;
+            t.detailChildId = t.multi[0].detailChildId || null;
+          }
+        } else {
+          delete t.multi;
+        }
+        return t;
+      });
+      this.state.goals = this.state.goals.map(function (g) {
+        if (g.categoryId === id) g.categoryId = null;
+        return g;
+      });
+      this.state.schedules = this.state.schedules.map(function (s) {
+        if (s.categoryId === id) s.categoryId = null;
+        return s;
+      });
+      this.save();
+    },
+    deleteSubcategory: function (catId, subId) {
+      const cat = this.categoryById(catId);
+      if (!cat) return false;
+      cat.subs = cat.subs.filter(function (s) { return s.id !== subId; });
+      this.state.transactions = this.state.transactions.map(function (t) {
+        const hit = function (e) { return e.categoryId === catId && e.subcategoryId === subId; };
+        if (!Array.isArray(t.multi)) {
+          if (hit(t)) {
+            t.subcategoryId = null;
+            t.detailId = null;
+            t.detailChildId = null;
+          }
+          return t;
+        }
+        t.multi = t.multi.filter(function (e) { return !hit(e); });
+        if (t.multi.length) {
+          if (hit(t)) {
+            t.categoryId = t.multi[0].categoryId;
+            t.subcategoryId = t.multi[0].subcategoryId || null;
+            t.detailId = t.multi[0].detailId || null;
+            t.detailChildId = t.multi[0].detailChildId || null;
+          }
+        } else {
+          delete t.multi;
+          if (hit(t)) {
+            t.subcategoryId = null;
+            t.detailId = null;
+            t.detailChildId = null;
+          }
+        }
+        return t;
+      });
+      this.save();
+      return true;
+    },
+    deleteDetail: function (catId, subId, detailId) {
+      const cat = this.categoryById(catId);
+      const sub = cat ? cat.subs.find(function (s) { return s.id === subId; }) : null;
+      if (!sub) return false;
+      sub.children = (sub.children || []).filter(function (d) { return d.id !== detailId; });
+      this.state.transactions = this.state.transactions.map(function (t) {
+        const hit = function (e) { return e.categoryId === catId && e.subcategoryId === subId && e.detailId === detailId; };
+        if (!Array.isArray(t.multi)) {
+          if (hit(t)) {
+            t.detailId = null;
+            t.detailChildId = null;
+          }
+          return t;
+        }
+        t.multi = t.multi.filter(function (e) { return !hit(e); });
+        if (t.multi.length) {
+          if (hit(t)) {
+            t.categoryId = t.multi[0].categoryId;
+            t.subcategoryId = t.multi[0].subcategoryId || null;
+            t.detailId = t.multi[0].detailId || null;
+            t.detailChildId = t.multi[0].detailChildId || null;
+          }
+        } else {
+          delete t.multi;
+          if (hit(t)) {
+            t.detailId = null;
+            t.detailChildId = null;
+          }
+        }
+        return t;
+      });
+      this.save();
+      return true;
+    },
+    deleteDetailChild: function (catId, subId, detailId, childId) {
+      const cat = this.categoryById(catId);
+      const sub = cat ? cat.subs.find(function (s) { return s.id === subId; }) : null;
+      const detail = sub ? (sub.children || []).find(function (d) { return d.id === detailId; }) : null;
+      if (!detail) return false;
+      detail.children = (detail.children || []).filter(function (x) { return x.id !== childId; });
+      this.state.transactions = this.state.transactions.map(function (t) {
+        const hit = function (e) { return e.categoryId === catId && e.subcategoryId === subId && e.detailId === detailId && e.detailChildId === childId; };
+        if (!Array.isArray(t.multi)) {
+          if (hit(t)) t.detailChildId = null;
+          return t;
+        }
+        t.multi = t.multi.filter(function (e) { return !hit(e); });
+        if (t.multi.length) {
+          if (hit(t)) {
+            t.categoryId = t.multi[0].categoryId;
+            t.subcategoryId = t.multi[0].subcategoryId || null;
+            t.detailId = t.multi[0].detailId || null;
+            t.detailChildId = t.multi[0].detailChildId || null;
+          }
+        } else {
+          delete t.multi;
+          if (hit(t)) t.detailChildId = null;
+        }
+        return t;
+      });
+      this.save();
+      return true;
     },
     updateSettings: function (patch) {
       this.state.settings = Object.assign({}, this.state.settings, patch);
@@ -778,13 +1172,19 @@
       try {
         const parsed = typeof json === 'string' ? JSON.parse(json) : json;
         const data = parsed && parsed.data ? parsed.data : parsed;
+        const preview = JSON.parse(JSON.stringify((data && Array.isArray(data.categories) ? data.categories : [])));
+        const renamed = migrateCategoryNames(preview);
         const normalized = normalizeState(data);
         if (!normalized) {
           return { ok: false, msg: '文件格式不对，缺少账本数据' };
         }
         this.state = normalized;
         this.save();
-        return { ok: true };
+        return {
+          ok: true,
+          renamed: renamed,
+          msg: renamed.length ? '导入完成，已自动重命名 ' + renamed.length + ' 个重复分类名称' : ''
+        };
       } catch (e) {
         return { ok: false, msg: '解析失败：' + e.message };
       }

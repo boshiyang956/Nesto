@@ -8,6 +8,9 @@ data/
 server.js
 tools/
 
+# Local screenshots
+/shot-*.png
+
 # Node
 node_modules/
 .env

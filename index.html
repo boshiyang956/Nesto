@@ -11,7 +11,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="css/styles.css?v=13">
+  <link rel="stylesheet" href="css/styles.css?v=27">
 </head>
 <body>
   <!-- 登录页 -->
@@ -29,8 +29,8 @@
       </div>
       <form id="loginForm" class="login-form" autocomplete="on">
         <label class="field">
-          <span>用户名</span>
-          <input id="loginName" name="username" type="text" placeholder="给自己起个名字" required>
+          <span>用户名 / N码</span>
+          <input id="loginName" name="username" type="text" placeholder="用户名或 N码" required>
         </label>
         <label class="field">
           <span>密码</span>
@@ -48,11 +48,13 @@
   <div id="app" class="app hidden">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-head">
-        <div class="brand-mark small">暖</div>
-        <div class="brand-name">
-          <strong>暖账本</strong>
-          <span>warm ledger</span>
-        </div>
+        <button class="profile-btn" type="button" id="profileBtn" title="个人主页">
+          <span class="avatar" id="sidebarAvatar">暖</span>
+          <span class="profile-text">
+            <strong id="sidebarUserName">访客</strong>
+            <span id="sidebarNcode">N码</span>
+          </span>
+        </button>
         <button class="icon-btn sidebar-close" type="button" id="sidebarCloseBtn" title="收起菜单" aria-label="收起菜单"></button>
       </div>
       <nav class="side-nav" aria-label="主导航">
@@ -75,6 +77,7 @@
         </div>
       </div>
     </aside>
+    <div id="sidebarBackdrop" class="sidebar-backdrop" aria-hidden="true"></div>
 
     <div class="app-main">
       <header class="topbar">
@@ -102,12 +105,12 @@
   <div id="modalRoot" class="modal-root"></div>
   <div id="toastRoot" class="toast-root" aria-live="polite"></div>
 
-  <script src="js/utils.js?v=13"></script>
-  <script src="js/store.js?v=13"></script>
-  <script src="js/charts.js?v=13"></script>
-  <script src="js/views.js?v=13"></script>
-  <script src="js/modals.js?v=13"></script>
-  <script src="js/app.js?v=13"></script>
+  <script src="js/utils.js?v=27"></script>
+  <script src="js/store.js?v=27"></script>
+  <script src="js/charts.js?v=27"></script>
+  <script src="js/views.js?v=27"></script>
+  <script src="js/modals.js?v=27"></script>
+  <script src="js/app.js?v=27"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function () {

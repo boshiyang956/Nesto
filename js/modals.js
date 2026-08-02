@@ -2,6 +2,7 @@
   'use strict';
   const U = window.Utils;
   const S = window.Store;
+  const CARD_COLORS = ['#e5484d', '#2563eb', '#16a34a', '#f59e0b', '#8b5cf6'];
 
   function parseRepeatForEdit(repeat) {
     const p = U.parseRepeat(repeat);
@@ -48,6 +49,8 @@
     // ---------- 记一笔 ----------
     openAddTx: function (tx, presetDate) {
       const V = window.Views;
+      const txMulti = tx && Array.isArray(tx.multi) && tx.multi.length > 1;
+      const morningTime = S.settings.defaultMorningTime || '08:00';
       V._txForm = {
         type: tx ? (tx.kind === 'income' ? 'income' : 'expense') : 'expense',
         catId: tx ? tx.categoryId : null,
@@ -57,8 +60,10 @@
         mood: tx ? tx.mood : null,
         photo: tx ? tx.photo : null,
         editing: tx ? tx.id : null,
-        multi: false,
-        selections: [],
+        multi: txMulti,
+        selections: txMulti ? tx.multi.map(function (m) {
+          return { catId: m.categoryId || tx.categoryId, subId: m.subcategoryId || null, detailId: m.detailId || null, detailChildId: m.detailChildId || null, amount: tx.amount };
+        }) : [],
         detailEdit: null,
         detailChildEdit: null,
         subEdit: null,
@@ -75,7 +80,7 @@
         '<button type="button" data-action="tx-type" data-type="expense"' + (V._txForm.type === 'expense' ? ' class="is-active"' : '') + '>支出</button>' +
         '<button type="button" data-action="tx-type" data-type="income"' + (V._txForm.type === 'income' ? ' class="is-active"' : '') + '>收入</button></div>' +
         '<div class="amount-input"><span class="cur">' + U.escapeHtml(S.settings.currencySymbol || '¥') + '</span><input id="txAmount" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0.00" value="' + (tx ? tx.amount : '') + '"></div>' +
-        '<div class="toolbar" style="margin-top:2px"><button class="ghost-btn compact" type="button" data-action="tx-multi">' + U.icon('tags', 15) + ' 多分类</button><span class="muted small" id="txMultiHint"></span></div>' +
+        '<div class="toolbar" style="margin-top:2px"><button class="ghost-btn compact" type="button" data-action="tx-multi">' + U.icon('tags', 15) + ' 多选</button><span class="muted small" id="txMultiHint"></span></div>' +
         '<div id="txSplitBox"></div>' +
         '<div class="field"><span>分类（点击可钻取小类）</span><div class="chip-grid" id="txCats"></div></div>' +
         '<div class="toolbar" style="margin-top:-4px">' +
@@ -99,7 +104,7 @@
         '<div class="field"><span>收支方式</span><select id="txPayment"><option value="现金"' + (tx && tx.paymentType === '现金' ? ' selected' : '') + '>现金</option><option value="电子"' + (!tx || tx.paymentType === '电子' ? ' selected' : '') + '>电子</option></select></div>' +
         '<div class="field"><span>关联卡片（可选）</span><select id="txCard"><option value="">不使用卡片</option>' + cardsOpts + '</select></div>' +
         '<div class="field"><span>日期</span><input id="txDate" type="date" value="' + (tx ? tx.date : presetDate || U.todayStr()) + '"></div>' +
-        '<div class="field"><span>时间</span><input id="txTime" type="time" value="' + (tx ? tx.time : U.nowTimeStr()) + '"></div>' +
+        '<div class="field"><span>时间</span><input id="txTime" type="time" value="' + (tx ? tx.time : (presetDate ? morningTime : U.nowTimeStr())) + '"></div>' +
         '</div>' +
         '<div class="field"><span>心情</span><div class="mood-row" id="txMoods">' +
         ['😊', '😐', '😌', '😢', '😡'].map(function (m) {
@@ -137,14 +142,14 @@
           f.catId = cats.length ? cats[0].id : null;
           f.subId = cats.length && cats[0].subs.length ? cats[0].subs[0].id : null;
         }
-      } else if (!f.selections.length && cats.length) {
+      } else if (!f.selections.length && cats.length && !f.suppressAutoFill) {
         f.selections.push({ catId: cats[0].id, subId: cats[0].subs.length ? cats[0].subs[0].id : null, detailId: null, amount: 0 });
       }
       const catBox = U.qs('#txCats');
       if (catBox) {
         catBox.innerHTML = cats.map(function (c) {
           const active = f.multi ? f.selections.some(function (s) { return s.catId === c.id; }) : f.catId === c.id;
-          return '<button class="cat-chip' + (active ? ' is-active' : '') + '" type="button" data-action="tx-cat" data-cat-id="' + c.id + '"><span class="dot" style="background:' + c.color + '"></span>' + U.escapeHtml(c.icon + ' ' + c.name) + '</button>';
+          return '<button class="cat-chip' + (active ? ' is-active' : '') + '" type="button" data-action="tx-cat" data-cat-id="' + c.id + '"><span class="dot" style="background:' + c.color + '"></span>' + U.escapeHtml(c.icon + ' ' + c.name) + (f.multi && active ? '<span class="chip-check">' + U.icon('check', 12) + '</span>' : '') + '</button>';
         }).join('');
       }
       const cat = S.categoryById(f.catId);
@@ -182,7 +187,8 @@
           V._txForm.subEdit = null;
           V._txForm.detailEdit = null;
           V._txForm.catEdit = { mode: 'edit', catId: catId };
-          M.updateTxUi();
+          V._txForm.suppressAutoFill = true;
+          window.Modals.updateTxUi();
         });
       });
       const sub = f.multi ? null : S.subById(f.catId, f.subId);
@@ -207,12 +213,12 @@
             });
           });
           detailBox.innerHTML = html || '<span class="muted small">先选择小类</span>';
-          if (detailField) detailField.classList.toggle('hidden', !html);
+          if (detailField) detailField.classList.toggle('hidden', !selSubs.length);
         } else {
           detailBox.innerHTML = details.map(function (d) {
             return '<button class="cat-chip small' + (f.detailId === d.id ? ' is-active' : '') + '" type="button" data-action="tx-detail" data-detail-id="' + d.id + '"><span class="dot" style="background:' + d.color + '"></span>' + U.escapeHtml(d.name) + '</button>';
           }).join('');
-          if (detailField) detailField.classList.toggle('hidden', !sub || !details.length);
+          if (detailField) detailField.classList.toggle('hidden', !sub);
         }
       }
       const childField = U.qs('#txDetailChildField');
@@ -225,14 +231,14 @@
           childBox.innerHTML = children.map(function (x) {
             return '<button class="cat-chip small' + (f.detailChildId === x.id ? ' is-active' : '') + '" type="button" data-action="tx-detailchild" data-detail-child-id="' + x.id + '"><span class="dot" style="background:' + x.color + '"></span>' + U.escapeHtml(x.name) + '</button>';
           }).join('') || '<span class="muted small">该细分类暂无小类</span>';
-          if (childField) childField.classList.toggle('hidden', !children.length);
+          if (childField) childField.classList.toggle('hidden', !detail);
         } else {
           childBox.innerHTML = '';
           if (childField) childField.classList.add('hidden');
         }
       }
       const hint = U.qs('#txMultiHint');
-      if (hint) hint.textContent = f.multi ? '可同时选择多个分类和小类' : '';
+      if (hint) hint.textContent = f.multi ? '同一笔金额将同时计入所选分类' : '';
       Modals.renderSplitList();
       Modals.renderDetailEditor();
       Modals.renderDetailChildEditor();
@@ -258,18 +264,13 @@
         return;
       }
       box.classList.remove('hidden');
-      box.innerHTML = '<div class="split-box">' + f.selections.map(function (s, i) {
+      box.innerHTML = '<div class="split-box"><div class="small bold">这笔金额将同时计入：</div>' + f.selections.map(function (s) {
         let label = S.catName(s.catId);
         if (s.subId) label += ' · ' + S.subName(s.catId, s.subId);
         if (s.detailId) label += ' · ' + S.detailName(s.catId, s.subId, s.detailId);
-        return '<div class="split-row"><span class="split-name">' + U.escapeHtml(label) + '</span><input class="split-amount" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="0.00" value="' + (s.amount > 0 ? s.amount : '') + '" data-index="' + i + '"></div>';
+        if (s.detailChildId) label += ' · ' + S.detailChildName(s.catId, s.subId, s.detailId, s.detailChildId);
+        return '<span class="split-tag"><span class="dot" style="background:' + S.catColor(s.catId) + '"></span>' + U.escapeHtml(label) + '</span>';
       }).join('') + '</div>';
-      U.qsa('#txSplitBox .split-amount').forEach(function (inp) {
-        inp.addEventListener('input', function () {
-          const idx = +inp.getAttribute('data-index');
-          if (f.selections[idx]) f.selections[idx].amount = parseFloat(inp.value) || 0;
-        });
-      });
     },
 
     renderCatEditor: function () {
@@ -382,13 +383,17 @@
 
     // ---------- 卡片 ----------
     openCard: function (card) {
+      const color = card ? card.color : CARD_COLORS[S.cards.length % CARD_COLORS.length];
+      const presets = CARD_COLORS.map(function (c) {
+        return '<button class="color-swatch' + (c.toLowerCase() === String(color).toLowerCase() ? ' is-active' : '') + '" type="button" data-action="card-color" data-color="' + c + '" style="background:' + c + '" title="' + c + '"></button>';
+      }).join('');
       const html =
         '<div class="modal-head"><h3>' + (card ? '编辑卡片' : '添加卡片') + '</h3><button class="icon-btn" type="button" data-action="close-modal">' + U.icon('x', 18) + '</button></div>' +
         '<div class="modal-body">' +
         '<div class="field"><span>卡片名称</span><input id="cardName" type="text" placeholder="如：建设银行储蓄卡" value="' + (card ? U.escapeHtml(card.name) : '') + '"></div>' +
         '<div class="form-grid">' +
         '<div class="field"><span>类型</span><select id="cardType"><option value="电子"' + (!card || card.type === '电子' ? ' selected' : '') + '>电子</option><option value="现金"' + (card && card.type === '现金' ? ' selected' : '') + '>现金</option></select></div>' +
-        '<div class="field"><span>颜色</span><input id="cardColor" type="color" value="' + (card ? card.color : '#2563eb') + '" style="height:40px"></div>' +
+        '<div class="field"><span>颜色</span><div class="color-presets">' + presets + '<label class="color-custom" title="自定义颜色">' + U.icon('edit', 14) + '<input id="cardColor" type="color" value="' + color + '"></label></div></div>' +
         '<div class="field"><span>初始余额</span><input id="cardInitial" type="number" step="0.01" min="0" value="' + (card ? card.initialBalance : 0) + '"></div>' +
         '<div class="field"><span>备注</span><input id="cardNote" type="text" placeholder="如：生活主卡" value="' + (card ? U.escapeHtml(card.note || '') : '') + '"></div>' +
         '</div></div>' +
@@ -600,6 +605,7 @@
         '</div>' +
         '<div class="field"><span>阈值提醒（可设置多个）</span><div class="chip-grid" id="goalThresholdRows"></div></div>' +
         '<button class="ghost-btn compact" type="button" data-action="goal-add-threshold">' + U.icon('plus', 15) + ' 添加阈值</button>' +
+        '<div class="field"><span>给未来自己的寄语</span><textarea id="goalMessage" rows="2" placeholder="写一句想对完成目标后的自己说的话">' + (goal && goal.message ? U.escapeHtml(goal.message) : '') + '</textarea></div>' +
         '</div>' +
         '<div class="modal-foot"><button class="ghost-btn" type="button" data-action="close-modal">取消</button><button class="primary-btn" type="button" data-action="save-goal">' + (goal ? '保存' : '创建') + '</button></div>';
       this.open(html, { onMount: function () { Modals.updateGoalThresholds(); } });
@@ -668,6 +674,42 @@
         '<div class="modal-foot"><button class="ghost-btn" type="button" data-action="close-modal">取消</button><button class="primary-btn" type="button" data-action="save-detail">' + (detail ? '保存' : '添加') + '</button></div>';
       this.open(html);
       window.Views._detailTarget = { catId: catId, subId: subId, detailId: detail ? detail.id : null };
+    },
+
+    openDetailChild: function (catId, subId, detailId, child) {
+      const html =
+        '<div class="modal-head"><h3>' + (child ? '编辑小类' : '添加小类') + '</h3><button class="icon-btn" type="button" data-action="close-modal">' + U.icon('x', 18) + '</button></div>' +
+        '<div class="modal-body">' +
+        '<div class="form-grid">' +
+        '<div class="field"><span>名称</span><input id="detailChildName" type="text" placeholder="如：普通门诊" value="' + (child ? U.escapeHtml(child.name) : '') + '"></div>' +
+        '<div class="field"><span>颜色</span><input id="detailChildColor" type="color" value="' + (child ? child.color : '#a78bfa') + '" style="height:40px"></div>' +
+        '</div></div>' +
+        '<div class="modal-foot"><button class="ghost-btn" type="button" data-action="close-modal">取消</button><button class="primary-btn" type="button" data-action="save-detailchild">' + (child ? '保存' : '添加') + '</button></div>';
+      this.open(html);
+      window.Views._detailChildTarget = { catId: catId, subId: subId, detailId: detailId, childId: child ? child.id : null };
+    },
+
+    openProfile: function () {
+      const name = S.currentUserName();
+      const ncode = S.currentUserNcode();
+      const html =
+        '<div class="modal-head"><h3>个人主页</h3><button class="icon-btn" type="button" data-action="close-modal">' + U.icon('x', 18) + '</button></div>' +
+        '<div class="modal-body">' +
+        '<div class="profile-hero"><span class="avatar big">' + U.escapeHtml((name || '暖').charAt(0)) + '</span><div><strong>' + U.escapeHtml(name) + '</strong><span>' + (ncode ? 'N码 ' + U.escapeHtml(ncode) : 'N码') + '</span></div></div>' +
+        '<label class="field"><span>昵称</span><input id="profileName" type="text" maxlength="20" value="' + U.escapeHtml(name) + '"></label>' +
+        '<div class="toolbar"><button class="primary-btn compact" type="button" data-action="save-profile-name">保存昵称</button></div>' +
+        '<label class="field" style="margin-top:12px"><span>N码（唯一，可用来登录）</span><input id="profileNcode" type="text" maxlength="16" value="' + U.escapeHtml(ncode) + '"></label>' +
+        '<p class="muted small" style="margin:-4px 0 6px">仅限字母、数字和 -，修改后下次可用新 N码 登录</p>' +
+        '<div class="toolbar"><button class="primary-btn compact" type="button" data-action="save-ncode">保存 N码</button></div>' +
+        '<div style="height:14px"></div>' +
+        '<label class="field"><span>原密码</span><input id="oldPass" type="password" placeholder="不修改可留空"></label>' +
+        '<label class="field"><span>新密码</span><input id="newPass" type="password" placeholder="至少 4 位"></label>' +
+        '<button class="ghost-btn" type="button" data-action="save-password" style="margin-top:8px">修改密码</button>' +
+        '<div class="toolbar" style="margin-top:14px"><button class="ghost-btn compact" type="button" data-action="logout">' + U.icon('logout', 15) + ' 退出登录</button>' +
+        '<button class="danger-btn compact" type="button" data-action="delete-account">' + U.icon('trash', 15) + ' 删除账号</button></div>' +
+        '</div>' +
+        '<div class="modal-foot"><button class="ghost-btn" type="button" data-action="close-modal">关闭</button></div>';
+      this.open(html);
     }
   };
 
