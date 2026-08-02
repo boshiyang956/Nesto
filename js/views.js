@@ -104,17 +104,47 @@
     },
 
     toast: function (title, msg, type) {
+      if (S.settings.showToasts === false) return;
       type = type || '';
       const ico = type === 'success' ? 'check' : type === 'danger' ? 'alert' : type === 'warn' ? 'bell' : 'sparkle';
       const el = document.createElement('div');
       el.className = 'toast ' + type;
-      el.innerHTML = '<span class="toast-ico">' + U.icon(ico, 18) + '</span><div class="toast-body"><strong>' + U.escapeHtml(title) + '</strong>' + (msg ? '<span>' + U.escapeHtml(msg) + '</span>' : '') + '</div>';
+      el.innerHTML = '<span class="toast-ico">' + U.icon(ico, 18) + '</span><div class="toast-body"><strong>' + U.escapeHtml(title) + '</strong>' + (msg ? '<span>' + U.escapeHtml(msg) + '</span>' : '') + '</div><button class="toast-close" type="button" aria-label="关闭提示">' + U.icon('x', 14) + '</button>';
       U.qs('#toastRoot').appendChild(el);
-      setTimeout(function () {
-        el.style.opacity = '0';
-        el.style.transform = 'translateX(16px)';
+      let timer = null;
+      let startY = 0;
+      let swiped = false;
+
+      function dismiss(up) {
+        if (el.classList.contains('is-hiding')) return;
+        el.classList.add('is-hiding');
+        if (up) el.classList.add('is-up');
+        clearTimeout(timer);
         setTimeout(function () { el.remove(); }, 220);
-      }, 4600);
+      }
+
+      el.querySelector('.toast-close').addEventListener('click', function () { dismiss(false); });
+      el.addEventListener('touchstart', function (e) {
+        startY = e.touches[0].clientY;
+        swiped = false;
+      }, { passive: true });
+      el.addEventListener('touchmove', function (e) {
+        const dy = e.touches[0].clientY - startY;
+        if (dy < -18) {
+          swiped = true;
+          el.classList.add('is-swipe');
+          el.style.transform = 'translateY(' + Math.max(dy, -80) + 'px)';
+          el.style.opacity = String(Math.max(0, 1 + dy / 80));
+        }
+      }, { passive: true });
+      el.addEventListener('touchend', function () {
+        if (swiped) dismiss(true);
+        else {
+          el.style.transform = '';
+          el.style.opacity = '';
+        }
+      }, { passive: true });
+      timer = setTimeout(function () { dismiss(false); }, 1000);
     }
   };
 
@@ -954,7 +984,8 @@
 
       '<div class="section"><div class="section-head"><h3>提醒</h3></div>' +
       '<div class="setting-row"><div class="info"><strong>节日提醒</strong><span>父亲节、母亲节、生日等自动提醒记账</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="holidayReminders"' + (st.holidayReminders !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
-      '<div class="setting-row"><div class="info"><strong>俏皮提醒</strong><span>阈值提醒使用更有趣的文案</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="playfulReminders"' + (st.playfulReminders !== false ? ' checked' : '') + '><span class="track"></span></label></div></div>' +
+      '<div class="setting-row"><div class="info"><strong>俏皮提醒</strong><span>阈值提醒使用更有趣的文案</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="playfulReminders"' + (st.playfulReminders !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
+      '<div class="setting-row"><div class="info"><strong>提示消息</strong><span>记账成功、金额错误等轻提示，可上滑或用右上角 × 关闭；关闭后不再显示</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="showToasts"' + (st.showToasts !== false ? ' checked' : '') + '><span class="track"></span></label></div></div>' +
 
       '<div class="view-row grid-2">' +
       '<div class="section"><div class="section-head"><h3>账号</h3></div>' +

@@ -75,6 +75,7 @@
     backgroundValue: '',
     holidayReminders: true,
     playfulReminders: true,
+    showToasts: true,
     currencySymbol: '¥'
   };
 

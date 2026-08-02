@@ -945,11 +945,14 @@ body[data-theme="midnight"] .topbar { background: color-mix(in srgb, var(--bg) 8
   border-left: 4px solid var(--primary);
   border-radius: 10px;
   box-shadow: var(--shadow);
-  padding: 12px 14px;
+  padding: 12px 38px 12px 14px;
   display: flex;
   gap: 10px;
   align-items: flex-start;
   animation: toast-in .22s ease;
+  transition: transform .22s ease, opacity .22s ease;
+  position: relative;
+  touch-action: none;
   font-size: 13px;
 }
 .toast.success { border-left-color: var(--success); }
@@ -962,8 +965,28 @@ body[data-theme="midnight"] .topbar { background: color-mix(in srgb, var(--bg) 8
 .toast.warn .toast-ico { color: var(--warn); }
 .toast.accent .toast-ico { color: var(--accent); }
 .toast-ico svg { width: 18px; height: 18px; }
+.toast-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.toast-close:hover { background: color-mix(in srgb, var(--muted) 12%, transparent); }
+.toast-close svg { width: 14px; height: 14px; }
 .toast-body strong { display: block; }
 .toast-body span { color: var(--muted); font-size: 12px; }
+.toast.is-hiding { opacity: 0; transform: translateY(-14px); }
+.toast.is-hiding.is-up { transform: translateY(-42px); }
 @keyframes toast-in { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 /* ---------- 响应式 ---------- */
