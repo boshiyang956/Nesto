@@ -1,4 +1,4 @@
-const CACHE = 'warm-ledger-v23';
+const CACHE = 'warm-ledger-v24';
 const CORE = [
   './',
   './index.html',

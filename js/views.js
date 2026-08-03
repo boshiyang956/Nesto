@@ -107,8 +107,8 @@
     },
 
     toast: function (title, msg, type) {
-      if (S.settings.showToasts === false) return;
       type = type || '';
+      if (S.settings.showToasts === false && type === 'success') return;
       const ico = type === 'success' ? 'check' : type === 'danger' ? 'alert' : type === 'warn' ? 'bell' : 'sparkle';
       const el = document.createElement('div');
       el.className = 'toast ' + type;
@@ -1716,7 +1716,7 @@
       '<div class="section"><div class="section-head"><h3>提醒</h3></div>' +
       '<div class="setting-row"><div class="info"><strong>节日提醒</strong><span>父亲节、母亲节、生日等自动提醒记账</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="holidayReminders"' + (st.holidayReminders !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
       '<div class="setting-row"><div class="info"><strong>俏皮提醒</strong><span>阈值提醒使用更有趣的文案</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="playfulReminders"' + (st.playfulReminders !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
-      '<div class="setting-row"><div class="info"><strong>提示消息</strong><span>记账成功、金额错误等轻提示，可上滑或用右上角 × 关闭；关闭后不再显示</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="showToasts"' + (st.showToasts !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
+      '<div class="setting-row"><div class="info"><strong>提示消息</strong><span>记账成功、已保存等确认消息；关闭后仍会显示金额错误、名称重复等警示消息</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="showToasts"' + (st.showToasts !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
       '<div class="setting-row"><div class="info"><strong>回车提交</strong><span>编辑名称时按回车直接完成，长按回车换行</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="enterToSubmit"' + (st.enterToSubmit !== false ? ' checked' : '') + '><span class="track"></span></label></div>' +
       '<div class="setting-row"><div class="info"><strong>长按回车换行</strong><span>长按回车插入换行，普通回车仍然提交</span></div><label class="switch"><input type="checkbox" data-action="toggle-setting" data-key="enterLongPressNewline"' + (st.enterLongPressNewline !== false ? ' checked' : '') + '><span class="track"></span></label></div></div>' +
       '<div class="section"><div class="section-head"><h3>记账时间</h3><span class="sub">日历双击今天或日视图记账的默认时间</span></div>' +
