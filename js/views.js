@@ -205,10 +205,12 @@
     let drag = null;
     let timer = null;
     let rafId = null;
+    let finishing = false;
+    let dragSeq = 0;
 
     function items() { return Array.prototype.slice.call(container.querySelectorAll(itemSel)); }
 
-    function clearItemAnimations() {
+    function cancelItemAnimations() {
       items().forEach(function (el) {
         if (el.getAnimations) {
           try { el.getAnimations().forEach(function (a) { a.cancel(); }); } catch (err) {}
@@ -235,61 +237,173 @@
       });
     }
 
-    function cancel(restore) {
-      clearTimeout(timer);
-      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    function detachListeners() {
+      document.removeEventListener('pointermove', onDocPointerMove);
       document.removeEventListener('pointerup', onDocPointerUp);
       document.removeEventListener('pointercancel', onDocPointerCancel);
-      clearItemAnimations();
+      document.removeEventListener('touchmove', onDocTouchMove);
+      document.removeEventListener('lostpointercapture', onLostPointerCapture);
+      container.removeEventListener('contextmenu', onContextMenu);
+    }
+
+    function suppressClick(el) {
+      if (!el || !el.closest || !el.setAttribute) return;
+      const node = el.closest('[data-action], button, a, input, select, textarea') || el;
+      if (!node || !node.setAttribute) return;
+      const token = Date.now() + '_' + Math.random();
+      node.__skipClickToken = token;
+      node.setAttribute('data-skip-click', '1');
+      setTimeout(function () {
+        if (node.__skipClickToken === token) node.removeAttribute('data-skip-click');
+      }, 500);
+    }
+
+    function cleanup(restore) {
+      clearTimeout(timer);
+      timer = null;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      detachListeners();
+      cancelItemAnimations();
       container.classList.remove('is-reordering');
       if (drag) {
         if (restore !== false && drag.active) restoreOriginalOrder();
         clearDragStyles(drag.el, drag.pointerId, drag.captured);
       }
       drag = null;
+      finishing = false;
     }
 
-    function animateFlip(prev) {
+    function layoutRect(el) {
+      const savedTransform = el.style.transform;
+      const savedTransition = el.style.transition;
+      el.style.transition = 'none';
+      el.style.transform = '';
+      const rect = el.getBoundingClientRect();
+      el.style.transform = savedTransform;
+      el.style.transition = savedTransition;
+      return rect;
+    }
+
+    function fakeFinished(duration) {
+      return {
+        finished: new Promise(function (resolve) {
+          setTimeout(resolve, duration + 60);
+        })
+      };
+    }
+
+    function animateTranslate(el, dx, dy, duration) {
+      if (!dx && !dy) return null;
+      if (el.animate) {
+        try {
+          return el.animate(
+            [{ transform: 'translate(' + dx + 'px,' + dy + 'px)' }, { transform: 'translate(0,0)' }],
+            { duration: duration, easing: 'cubic-bezier(.22,.9,.28,1)' }
+          );
+        } catch (err) { return null; }
+      }
+      el.style.transition = 'none';
+      el.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+      void el.offsetHeight;
+      el.style.transition = 'transform ' + duration + 'ms cubic-bezier(.22,.9,.28,1)';
+      el.style.transform = 'translate(0,0)';
+      return fakeFinished(duration);
+    }
+
+    function animateToIdentity(el, from) {
+      if (el.animate) {
+        try {
+          return el.animate(
+            [{ transform: from }, { transform: 'translate(0,0) scale(1)' }],
+            { duration: 220, easing: 'cubic-bezier(.22,.9,.28,1)' }
+          );
+        } catch (err) { return null; }
+      }
+      el.style.transition = 'none';
+      el.style.transform = from;
+      void el.offsetHeight;
+      el.style.transition = 'transform 220ms cubic-bezier(.22,.9,.28,1)';
+      el.style.transform = 'translate(0,0) scale(1)';
+      return fakeFinished(220);
+    }
+
+    function flipItems(before) {
       items().forEach(function (el) {
         if (el === drag.el) return;
-        const before = prev[el];
-        if (!before) return;
+        const prev = before[el];
+        if (!prev) return;
         const after = el.getBoundingClientRect();
-        const dx = before.left - after.left;
-        const dy = before.top - after.top;
-        if (!dx && !dy) return;
-        if (el.animate) {
-          try {
-            el.animate(
-              [{ transform: 'translate(' + dx + 'px,' + dy + 'px)' }, { transform: 'translate(0,0)' }],
-              { duration: 220, easing: 'cubic-bezier(.22,.9,.28,1)' }
-            );
-          } catch (err) {}
+        animateTranslate(el, prev.left - after.left, prev.top - after.top, 220);
+      });
+    }
+
+    function settleAndFinish(sessionDrag, anims, fallbackMs) {
+      if (!anims.length) { finalize(sessionDrag); return; }
+      let left = anims.length;
+      let done = false;
+      function markDone() {
+        if (done) return;
+        if (drag !== sessionDrag) return;
+        done = true;
+        clearTimeout(timer);
+        timer = null;
+        finalize(sessionDrag);
+      }
+      timer = setTimeout(markDone, fallbackMs);
+      anims.forEach(function (anim) {
+        if (anim && anim.finished) {
+          anim.finished.then(function () {
+            left -= 1;
+            if (left <= 0) markDone();
+          }).catch(function () {
+            left -= 1;
+            if (left <= 0) markDone();
+          });
         } else {
-          el.style.transition = 'none';
-          el.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
-          void el.offsetHeight;
-          el.style.transition = '';
-          el.style.transform = '';
+          left -= 1;
+          if (left <= 0) markDone();
         }
       });
     }
 
+    function finalize(sessionDrag) {
+      if (!sessionDrag || drag !== sessionDrag || finishing) return;
+      finishing = true;
+      const changed = !!sessionDrag.changed;
+      clearTimeout(timer);
+      timer = null;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      detachListeners();
+      cancelItemAnimations();
+      container.classList.remove('is-reordering');
+      clearDragStyles(sessionDrag.el, sessionDrag.pointerId, sessionDrag.captured);
+      drag = null;
+      finishing = false;
+      if (changed) window.Views.toast('顺序已更新', '', 'success');
+    }
+
+    function applyDragTransform() {
+      const el = drag.el;
+      const layout = layoutRect(el);
+      const tx = drag.dx + drag.startRect.left - layout.left;
+      const ty = drag.dy + drag.startRect.top - layout.top;
+      el.style.transform = 'translate3d(' + tx + 'px,' + ty + 'px,0) scale(1.03) rotate(.5deg)';
+    }
+
     function moveToIndex(index) {
       if (!drag || !drag.el.parentElement) return;
-      const all = items();
-      const others = all.filter(function (el) { return el !== drag.el; });
-      const current = all.indexOf(drag.el);
+      const others = items().filter(function (el) { return el !== drag.el; });
       const target = Math.max(0, Math.min(index, others.length));
-      if (target === current) return;
-      clearItemAnimations();
-      const prev = {};
-      items().forEach(function (el) { prev[el] = el.getBoundingClientRect(); });
+      if (target === drag.currentIndex) return;
+      const before = {};
+      items().forEach(function (el) { before[el] = el.getBoundingClientRect(); });
+      cancelItemAnimations();
       const ref = target < others.length ? others[target] : null;
       drag.el.parentElement.insertBefore(drag.el, ref);
       drag.currentIndex = target;
       drag.changed = true;
-      animateFlip(prev);
+      flipItems(before);
+      applyDragTransform();
     }
 
     function desiredInsertIndex(px, py) {
@@ -369,116 +483,171 @@
 
     function processPointerMove(e) {
       if (!drag || drag.settling) return;
-      const dy = e.clientY - drag.y;
-      if (Math.abs(dy) > 4) drag.moved = true;
-      drag.el.style.transform = 'translate3d(0,' + dy + 'px,0) scale(1.03) rotate(.5deg)';
+      const el = drag.el;
+      drag.dx = e.clientX - drag.x;
+      drag.dy = e.clientY - drag.y;
+      if (Math.abs(drag.dx) > 4 || Math.abs(drag.dy) > 4) drag.moved = true;
+      if (!drag.liftDone) {
+        drag.liftDone = true;
+        clearTimeout(timer);
+        timer = null;
+        el.style.transition = 'none';
+      }
       const cr = container.getBoundingClientRect();
       const px = e.clientX - cr.left + container.scrollLeft;
       const py = e.clientY - cr.top + container.scrollTop;
       const target = desiredInsertIndex(px, py);
       if (target !== drag.currentIndex) moveToIndex(target);
+      else applyDragTransform();
       autoScroll(e);
     }
 
     function commitOrder() {
       if (!drag || !drag.changed || !drag.originalList.length) return;
-      const all = items();
-      const finalIndex = all.indexOf(drag.el);
+      const finalIndex = drag.currentIndex;
       if (finalIndex === drag.fromIndex) {
         drag.changed = false;
         return;
       }
       const fromId = drag.fromId;
-      const toId = drag.originalList[finalIndex].getAttribute('data-id');
+      const toEl = drag.originalList[finalIndex];
+      const toId = toEl ? toEl.getAttribute('data-id') : null;
       if (fromId && toId && onReorder) onReorder(fromId, toId);
     }
 
-    function finish() {
-      if (!drag) return;
-      const changed = drag.changed;
-      if (changed) window.Views.toast('顺序已更新', '', 'success');
-      cancel(false);
-    }
-
-    function onDocPointerUp() {
-      if (!drag) return;
-      if (!drag.active) { cancel(false); return; }
-      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-      if (drag.lastMove) processPointerMove(drag.lastMove);
+    function activate() {
+      if (!drag || drag.settling) return;
       const el = drag.el;
-      drag.settling = true;
-      el.setAttribute('data-skip-click', '1');
-      setTimeout(function () { el.removeAttribute('data-skip-click'); }, 500);
-      if (!drag.changed && !drag.moved) { cancel(false); return; }
-      if (drag.changed) commitOrder();
-      const from = window.getComputedStyle(el).transform;
-      el.style.transition = 'none';
-      let anim = null;
-      if (el.animate) {
+      const all = items();
+      const fromIndex = all.indexOf(el);
+      if (fromIndex < 0) { cleanup(true); return; }
+      drag.active = true;
+      drag.moved = false;
+      drag.changed = false;
+      drag.dx = 0;
+      drag.dy = 0;
+      drag.fromIndex = fromIndex;
+      drag.fromId = el.getAttribute('data-id');
+      drag.originalList = all.slice();
+      drag.currentIndex = drag.fromIndex;
+      drag.startRect = layoutRect(el);
+      container.classList.add('is-reordering');
+      el.classList.add('is-dragging');
+      el.style.touchAction = 'none';
+      drag.liftDone = false;
+      el.style.transform = 'translate3d(0,0,0) scale(1.03) rotate(.5deg)';
+      timer = setTimeout(function () {
+        if (drag && drag.el === el && drag.active && !drag.settling && !drag.liftDone) {
+          drag.liftDone = true;
+          el.style.transition = 'none';
+        }
+      }, 240);
+      if (el.setPointerCapture) {
         try {
-          anim = el.animate(
-            [{ transform: from }, { transform: 'translate(0,0) scale(1)' }],
-            { duration: 220, easing: 'cubic-bezier(.22,.9,.28,1)' }
-          );
+          el.setPointerCapture(drag.pointerId);
+          drag.captured = true;
         } catch (err) {}
       }
-      timer = setTimeout(finish, 260);
-      if (anim && anim.finished) {
-        anim.finished.then(function () { finish(); }).catch(function () { finish(); });
-      }
+      document.addEventListener('touchmove', onDocTouchMove, { passive: false });
+      document.addEventListener('lostpointercapture', onLostPointerCapture);
+      suppressClick(drag.pressEl);
+      window.Views.toast('已进入排序', '上下移动调整顺序', 'accent');
     }
 
-    function onDocPointerCancel() {
-      if (!drag) return;
-      if (drag.settling) return;
-      cancel(true);
-    }
-
-    container.addEventListener('pointerdown', function (e) {
-      const el = e.target.closest(itemSel);
-      if (!el) return;
-      if (e.target.closest('button, a, input, select, textarea')) return;
-      drag = { el: el, pointerId: e.pointerId, y: e.clientY, active: false, moved: false, changed: false, settling: false, captured: false, fromIndex: -1, fromId: null, originalList: [], currentIndex: -1, lastMove: null };
-      document.addEventListener('pointerup', onDocPointerUp);
-      document.addEventListener('pointercancel', onDocPointerCancel);
-      timer = setTimeout(function () {
-        if (!drag || drag.settling) return;
-        const all = items();
-        drag.active = true;
-        drag.moved = false;
-        drag.changed = false;
-        drag.fromIndex = all.indexOf(el);
-        drag.fromId = el.getAttribute('data-id');
-        drag.originalList = all.slice();
-        drag.currentIndex = drag.fromIndex;
-        container.classList.add('is-reordering');
-        el.classList.add('is-dragging');
-        el.style.touchAction = 'none';
-        el.style.transition = 'none';
-        el.style.transform = 'translate3d(0,0,0) scale(1.03) rotate(.5deg)';
-        if (el.setPointerCapture) {
-          try {
-            el.setPointerCapture(drag.pointerId);
-            drag.captured = true;
-          } catch (err) {}
-        }
-        window.Views.toast('已进入排序', '上下移动调整顺序', 'accent');
-      }, 420);
-    });
-
-    container.addEventListener('pointermove', function (e) {
+    function onDocPointerMove(e) {
       if (!drag || drag.settling) return;
+      if (e.pointerId !== drag.pointerId) return;
       if (!drag.active) {
-        if (Math.abs(e.clientY - drag.y) > 12) cancel(true);
+        if (Math.abs(e.clientX - drag.x) > 12 || Math.abs(e.clientY - drag.y) > 12) cleanup(true);
         return;
       }
-      e.preventDefault();
+      if (e.cancelable) e.preventDefault();
       drag.lastMove = e;
       if (!rafId) {
         rafId = requestAnimationFrame(function () {
           rafId = null;
           if (drag && drag.lastMove && drag.active) processPointerMove(drag.lastMove);
         });
+      }
+    }
+
+    function onDocTouchMove(e) {
+      if (drag && drag.active && !drag.settling && e.cancelable) e.preventDefault();
+    }
+
+    function onLostPointerCapture(e) {
+      if (drag && drag.captured && e.pointerId === drag.pointerId) drag.captured = false;
+    }
+
+    function onContextMenu(e) {
+      if (drag) e.preventDefault();
+    }
+
+    function onDocPointerUp(e) {
+      if (!drag) return;
+      if (e.pointerId !== drag.pointerId) return;
+      if (!drag.active) { cleanup(false); return; }
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      if (drag.lastMove) processPointerMove(drag.lastMove);
+      const el = drag.el;
+      drag.settling = true;
+      suppressClick(el);
+      const releaseTarget = document.elementFromPoint ? document.elementFromPoint(e.clientX, e.clientY) : null;
+      suppressClick(releaseTarget);
+      clearTimeout(timer);
+      timer = null;
+      if (drag.changed) commitOrder();
+      const from = window.getComputedStyle(el).transform;
+      el.style.transition = 'none';
+      const anim = animateToIdentity(el, from);
+      settleAndFinish(drag, anim ? [anim] : [], 340);
+    }
+
+    function onDocPointerCancel(e) {
+      if (!drag) return;
+      if (e.pointerId !== drag.pointerId) return;
+      if (drag.settling) return;
+      if (!drag.active) { cleanup(true); return; }
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      clearTimeout(timer);
+      timer = null;
+      drag.settling = true;
+      const before = {};
+      items().forEach(function (el) { before[el] = el.getBoundingClientRect(); });
+      cancelItemAnimations();
+      restoreOriginalOrder();
+      const el = drag.el;
+      el.style.transition = 'none';
+      el.style.transform = '';
+      const anims = [];
+      items().forEach(function (item) {
+        const prev = before[item];
+        if (!prev) return;
+        const after = item.getBoundingClientRect();
+        const anim = animateTranslate(item, prev.left - after.left, prev.top - after.top, 220);
+        if (anim) anims.push(anim);
+      });
+      settleAndFinish(drag, anims, 340);
+    }
+
+    container.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (e.target.closest('input, select, textarea')) return;
+      const el = e.target.closest(itemSel);
+      if (!el) return;
+      if (drag && drag.active && !drag.settling) return;
+      if (drag) cleanup(drag.settling ? false : true);
+      finishing = false;
+      const viaHandle = !!e.target.closest('.drag-grip');
+      drag = { session: ++dragSeq, el: el, pointerId: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, dy: 0, pressEl: e.target, active: false, moved: false, changed: false, settling: false, captured: false, liftDone: false, startRect: null, fromIndex: -1, fromId: null, originalList: [], currentIndex: -1, lastMove: null };
+      document.addEventListener('pointermove', onDocPointerMove);
+      document.addEventListener('pointerup', onDocPointerUp);
+      document.addEventListener('pointercancel', onDocPointerCancel);
+      container.addEventListener('contextmenu', onContextMenu);
+      if (viaHandle) {
+        activate();
+      } else {
+        timer = setTimeout(activate, 420);
       }
     });
 
@@ -1310,7 +1479,7 @@
     cards.forEach(function (card) {
       const bal = S.cardBalance(card.id);
       cardHtml += '<div class="bank-card' + (selId === card.id ? ' is-selected' : '') + '" style="background:linear-gradient(135deg,' + card.color + ', color-mix(in srgb, ' + card.color + ' 68%, #000))" data-action="card-select" data-card-id="' + card.id + '" data-id="' + card.id + '">' +
-        '<div class="card-top"><span class="card-ico">' + U.icon('wallet', 18) + '</span><div><div class="card-name">' + U.escapeHtml(card.name) + '</div><div class="card-type">' + U.escapeHtml(card.type) + ' · ' + U.escapeHtml(card.note || '') + '</div></div></div>' +
+        '<div class="card-top"><span class="card-ico">' + U.icon('wallet', 18) + '</span><div><div class="card-name">' + U.escapeHtml(card.name) + '</div><div class="card-type">' + U.escapeHtml(card.type) + ' · ' + U.escapeHtml(card.note || '') + '</div></div><span class="drag-grip" title="长按或拖动调整顺序">' + U.icon('grip', 14) + '</span></div>' +
         '<div class="card-balance"><div class="lbl">当前余额</div><div class="val">' + U.moneyPlain(bal) + '</div></div>' +
         '<div class="card-foot"><span>初始 ' + U.moneyPlain(card.initialBalance) + '</span><div class="card-actions">' +
         '<button class="icon-btn" type="button" data-action="card-op" data-card-id="' + card.id + '" data-op="recharge" title="充值">' + U.icon('arrowUp', 15) + '</button>' +
@@ -1474,6 +1643,7 @@
       }).join('');
       grid += '<div class="cat-card" data-id="' + cat.id + '"><div class="cat-card-head"><div class="cat-big-ico" style="background:' + cat.color + '">' + U.escapeHtml(cat.icon) + '</div>' +
         '<div class="cat-name"><strong>' + U.escapeHtml(cat.name) + '</strong><span>' + (cat.system ? '默认分类' : '自定义分类') + ' · ' + count + ' 笔账单</span></div>' +
+        '<span class="drag-grip" title="长按或拖动调整顺序">' + U.icon('grip', 14) + '</span>' +
         '<div class="tx-actions"><button class="icon-btn" type="button" data-action="add-sub" data-cat-id="' + cat.id + '" title="添加小类">' + U.icon('plus', 16) + '</button>' +
         '<button class="icon-btn" type="button" data-action="edit-category" data-id="' + cat.id + '" title="编辑大类">' + U.icon('edit', 16) + '</button>' +
         '<button class="icon-btn" type="button" data-action="delete-category" data-id="' + cat.id + '" title="删除大类">' + U.icon('trash', 16) + '</button></div></div>' +

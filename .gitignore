@@ -4,6 +4,11 @@ data/
 *.sqlite3
 *.db
 *.bak
+*.sql
+*.dump
+backup*.json
+export*.json
+/exports/
 
 # Release bundles
 *.zip
@@ -26,6 +31,10 @@ node_modules/
 *.pem
 *.pfx
 *.p12
+*.crt
+*.cer
+*.jks
+*.keystore
 .DS_Store
 Thumbs.db
 .idea/

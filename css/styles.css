@@ -785,6 +785,28 @@ a { color: var(--primary); }
 
 /* ---------- 卡片 ---------- */
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+.bank-card, .cat-card {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.drag-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  cursor: grab;
+  touch-action: none;
+  opacity: .78;
+}
+.drag-grip svg { width: 15px; height: 15px; }
+.bank-card .drag-grip { margin-left: auto; color: rgba(255,255,255,.92); background: rgba(255,255,255,.16); }
+.bank-card .drag-grip:hover { opacity: 1; background: rgba(255,255,255,.26); }
+.cat-card .drag-grip { color: var(--muted); background: var(--surface-2); }
+.cat-card .drag-grip:hover { opacity: 1; color: var(--text); }
 .bank-card {
   border-radius: 12px;
   color: #fff;
@@ -832,6 +854,8 @@ a { color: var(--primary); }
 .is-reordering .bank-card, .is-reordering .cat-card {
   transition: transform .22s cubic-bezier(.22,.9,.28,1), box-shadow .22s ease;
   pointer-events: none;
+  touch-action: none;
+  -webkit-user-select: none;
   user-select: none;
   will-change: transform;
 }
@@ -843,6 +867,7 @@ a { color: var(--primary); }
   box-shadow: 0 18px 34px rgba(20,30,60,.28);
   cursor: grabbing;
   will-change: transform;
+  transition: transform .16s cubic-bezier(.22,.9,.28,1), box-shadow .22s ease;
 }
 .is-reordering .cat-card.is-dragging { box-shadow: 0 18px 34px rgba(80,45,15,.24); }
 
